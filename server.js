@@ -853,6 +853,29 @@ app.delete('/api/kb/:id', async (req, res) => {
 });
 
 
+// ============================================================
+// TRANSCRIPT CLEANUP (AI-enhanced speech-to-text)
+// ============================================================
+
+app.post('/api/tickets/cleanup-transcript', async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: 'text is required' });
+
+    const cleaned = await callClaude(
+      'You clean up speech-to-text transcriptions. Fix grammar, spelling, punctuation, and capitalization. Remove filler words (um, uh, like). Keep the meaning and tone identical. Return ONLY the cleaned text, nothing else.',
+      text,
+      512
+    );
+
+    res.json({ success: true, cleaned });
+  } catch (error) {
+    // If AI cleanup fails, return original text
+    res.json({ success: true, cleaned: req.body.text });
+  }
+});
+
+
 app.listen(PORT, () => {
-  console.log(`🍄 TIPSY AF CS Backend v3 running on port ${PORT}`);
+  console.log(`🍄 TIPSY AF CS Backend v3.1 running on port ${PORT}`);
 });
