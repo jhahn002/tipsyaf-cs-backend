@@ -75,7 +75,10 @@ function generateAutoTags(purpose, message) {
 }
 
 function generateSummary(purpose, message, name) {
-  return `${name} submitted a ${purpose.toLowerCase()} inquiry via the contact form.`;
+  // Quick 20-word-max summary from the actual message
+  const clean = message.replace(/\s+/g, ' ').trim();
+  const short = clean.length > 120 ? clean.substring(0, 120).replace(/\s\S*$/, '') + '...' : clean;
+  return short;
 }
 
 function determinePriority(purpose, message) {
