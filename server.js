@@ -1,7 +1,8 @@
 // ============================================================
-// TIPSY AF — Customer Service Backend Server v3
+// TIPSY AF — Customer Service Backend Server v4
 // Features: Webhooks, tickets, KB, AI drafting, smart tagging,
-//           customer history, fuzzy matching, merge, threading
+//           customer history, fuzzy matching, merge, threading,
+//           Shopify integration, Loop subscription detection
 // Deploy to: Render.com
 // ============================================================
 
@@ -24,6 +25,21 @@ const supabase = createClient(
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
+
+// ---- Shopify Config ----
+const SHOPIFY_STORE = process.env.SHOPIFY_STORE_URL || 'tipsyaf.myshopify.com';
+const SHOPIFY_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
+
+async function shopifyAPI(endpoint, params = {}) {
+  if (!SHOPIFY_TOKEN) throw new Error('SHOPIFY_ACCESS_TOKEN not configured');
+  const qs = new URLSearchParams(params).toString();
+  const url = `https://${SHOPIFY_STORE}/admin/api/2024-01/${endpoint}.json${qs ? '?' + qs : ''}`;
+  const res = await fetch(url, {
+    headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) { const err = await res.text(); throw new Error(`Shopify API ${res.status}: ${err}`); }
+  return res.json();
+}
 
 
 // ============================================================
@@ -258,7 +274,7 @@ async function findOpenTicketForCustomer(customerId) {
 // ============================================================
 
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'TIPSY AF CS Backend v3', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', service: 'TIPSY AF CS Backend v4', timestamp: new Date().toISOString() });
 });
 
 
@@ -797,6 +813,178 @@ ${noteCtx ? `# INTERNAL NOTES\n${noteCtx}\n` : ''}`;
 
 
 // ============================================================
+// SHOPIFY INTEGRATION
+// ============================================================
+
+// ---- GET /api/shopify/customer?email=xxx ----
+// Look up a Shopify customer by email, return profile + orders + subscription info
+app.get('/api/shopify/customer', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) return res.status(400).json({ error: 'email query param required' });
+    if (!SHOPIFY_TOKEN) return res.json({ found: false, reason: 'Shopify not configured' });
+
+    // Search customer by email
+    const custData = await shopifyAPI('customers/search', { query: `email:${email}`, fields: 'id,email,first_name,last_name,phone,orders_count,total_spent,tags,note,created_at,metafields' });
+    const customers = custData.customers || [];
+
+    if (customers.length === 0) {
+      return res.json({ found: false });
+    }
+
+    const c = customers[0];
+
+    // Get orders for this customer
+    const orderData = await shopifyAPI('orders', {
+      customer_id: c.id,
+      status: 'any',
+      limit: 20,
+      fields: 'id,name,created_at,total_price,financial_status,fulfillment_status,fulfillments,line_items,tags,note,cancelled_at',
+      order: 'created_at desc',
+    });
+    const orders = (orderData.orders || []).map(o => {
+      // Extract fulfillment/tracking info
+      const fulfillments = (o.fulfillments || []).map(f => ({
+        status: f.status,
+        carrier: f.tracking_company || null,
+        trackingNumber: f.tracking_number || null,
+        trackingUrl: f.tracking_url || null,
+        updatedAt: f.updated_at,
+      }));
+
+      // Extract product/flavor info from line items
+      const items = (o.line_items || []).map(li => ({
+        title: li.title,
+        variant: li.variant_title || null,
+        quantity: li.quantity,
+        price: li.price,
+        sku: li.sku || null,
+      }));
+
+      // Detect subscription orders from tags
+      const tags = (o.tags || '').toLowerCase();
+      const isSubscription = tags.includes('subscription') || tags.includes('loop') || tags.includes('recurring');
+
+      return {
+        id: o.id,
+        name: o.name, // e.g. #1047
+        createdAt: o.created_at,
+        total: o.total_price,
+        financialStatus: o.financial_status,
+        fulfillmentStatus: o.fulfillment_status || 'unfulfilled',
+        cancelled: !!o.cancelled_at,
+        fulfillments,
+        items,
+        isSubscription,
+        tags: o.tags || '',
+      };
+    });
+
+    // Calculate stats
+    const totalOrders = c.orders_count || orders.length;
+    const totalSpent = parseFloat(c.total_spent || '0');
+    const avgOrderValue = totalOrders > 0 ? (totalSpent / totalOrders).toFixed(2) : '0.00';
+
+    // Detect subscription status from orders and tags
+    const customerTags = (c.tags || '').toLowerCase();
+    const subOrders = orders.filter(o => o.isSubscription);
+    let subscriptionStatus = 'none';
+    if (customerTags.includes('active subscriber') || customerTags.includes('active_subscriber')) {
+      subscriptionStatus = 'active';
+    } else if (customerTags.includes('cancelled subscriber') || customerTags.includes('cancelled_subscriber')) {
+      subscriptionStatus = 'cancelled';
+    } else if (customerTags.includes('paused subscriber') || customerTags.includes('paused_subscriber')) {
+      subscriptionStatus = 'paused';
+    } else if (subOrders.length > 0) {
+      // Has subscription orders but no tag — check recency
+      const lastSub = subOrders[0];
+      const daysSinceLast = (Date.now() - new Date(lastSub.createdAt).getTime()) / (1000 * 60 * 60 * 24);
+      subscriptionStatus = daysSinceLast < 45 ? 'active' : 'lapsed';
+    }
+
+    // Extract all flavors/products purchased
+    const productsPurchased = {};
+    for (const o of orders) {
+      for (const item of o.items) {
+        const key = item.variant ? `${item.title} - ${item.variant}` : item.title;
+        productsPurchased[key] = (productsPurchased[key] || 0) + item.quantity;
+      }
+    }
+
+    // Try to get Loop metafields from customer
+    let loopData = null;
+    try {
+      const metaRes = await shopifyAPI(`customers/${c.id}/metafields`);
+      const metafields = metaRes.metafields || [];
+      const loopFields = metafields.filter(m => m.namespace === 'loop' || m.namespace === 'loop_subscriptions');
+      if (loopFields.length > 0) {
+        loopData = {};
+        for (const f of loopFields) {
+          loopData[f.key] = f.value;
+        }
+      }
+    } catch (e) {
+      // Metafields may not be available, that's ok
+    }
+
+    // Update our Supabase customer record with Shopify data
+    const { data: ourCustomer } = await supabase
+      .from('customers')
+      .select('id')
+      .eq('email', email.toLowerCase())
+      .single();
+
+    if (ourCustomer) {
+      await supabase.from('customers').update({
+        shopify_customer_id: c.id.toString(),
+        shopify_order_count: totalOrders,
+        shopify_ltv: totalSpent,
+        updated_at: new Date().toISOString(),
+      }).eq('id', ourCustomer.id);
+    }
+
+    res.json({
+      found: true,
+      customer: {
+        shopifyId: c.id,
+        name: `${c.first_name || ''} ${c.last_name || ''}`.trim(),
+        email: c.email,
+        phone: c.phone,
+        tags: c.tags,
+        note: c.note,
+        createdAt: c.created_at,
+        totalOrders,
+        totalSpent: totalSpent.toFixed(2),
+        avgOrderValue,
+        subscriptionStatus,
+        loopData,
+        productsPurchased,
+      },
+      orders,
+      recentOrder: orders.length > 0 ? orders[0] : null,
+    });
+
+  } catch (error) {
+    console.error('❌ Shopify lookup error:', error);
+    res.status(500).json({ error: 'Shopify lookup failed', details: error.message });
+  }
+});
+
+
+// ---- GET /api/shopify/order/:orderId ----
+// Get detailed info about a specific order
+app.get('/api/shopify/order/:orderId', async (req, res) => {
+  try {
+    if (!SHOPIFY_TOKEN) return res.json({ error: 'Shopify not configured' });
+    const data = await shopifyAPI(`orders/${req.params.orderId}`);
+    res.json({ order: data.order });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch order', details: error.message });
+  }
+});
+
+
+// ============================================================
 // KNOWLEDGE BASE
 // ============================================================
 
@@ -877,5 +1065,5 @@ app.post('/api/tickets/cleanup-transcript', async (req, res) => {
 
 
 app.listen(PORT, () => {
-  console.log(`🍄 TIPSY AF CS Backend v3.1 running on port ${PORT}`);
+  console.log(`🍄 TIPSY AF CS Backend v4 running on port ${PORT}`);
 });
