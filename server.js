@@ -1,8 +1,8 @@
 // ============================================================
-// TIPSY AF — Customer Service Backend Server v4
-// Features: Webhooks, tickets, KB, AI drafting, smart tagging,
-//           customer history, fuzzy matching, merge, threading,
-//           Shopify integration, Loop subscription detection
+// TIPSY AF — Customer Service Backend Server v4.2
+// Features: Webhooks, tickets, KB, AI drafting with Shopify context,
+//           smart tagging, customer history, fuzzy matching, merge,
+//           threading, Shopify integration, Loop subscription detection
 // Deploy to: Render.com
 // ============================================================
 
@@ -277,7 +277,7 @@ async function findOpenTicketForCustomer(customerId) {
 // ============================================================
 
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'TIPSY AF CS Backend v4', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', service: 'TIPSY AF CS Backend v4.2', timestamp: new Date().toISOString() });
 });
 
 
@@ -748,6 +748,79 @@ app.post('/api/tickets/:ticketId/draft', async (req, res) => {
       .order('created_at', { ascending: false })
       .limit(5);
 
+    // ---- Shopify lookup ----
+    let shopifyCtx = 'No Shopify data available.';
+    if (SHOPIFY_TOKEN && ticket.customer?.email) {
+      try {
+        const custData = await shopifyAPI('customers/search', { query: `email:${ticket.customer.email}`, fields: 'id,email,orders_count,total_spent,tags' });
+        const shopCust = (custData.customers || [])[0];
+        if (shopCust) {
+          const orderData = await shopifyAPI('orders', {
+            customer_id: shopCust.id, status: 'any', limit: 10,
+            fields: 'id,name,created_at,total_price,financial_status,fulfillment_status,fulfillments,line_items,tags,cancelled_at',
+            order: 'created_at desc',
+          });
+          const orders = orderData.orders || [];
+          const totalSpent = parseFloat(shopCust.total_spent || '0');
+          const totalOrders = shopCust.orders_count || orders.length;
+
+          // Subscription detection
+          const custTags = (shopCust.tags || '').toLowerCase();
+          let subStatus = 'none';
+          if (custTags.includes('active subscriber')) subStatus = 'active';
+          else if (custTags.includes('cancelled subscriber')) subStatus = 'cancelled';
+          else if (custTags.includes('paused subscriber')) subStatus = 'paused';
+
+          // Products purchased
+          const products = {};
+          orders.forEach(o => (o.line_items || []).forEach(li => {
+            const key = li.variant_title ? `${li.title} (${li.variant_title})` : li.title;
+            products[key] = (products[key] || 0) + li.quantity;
+          }));
+
+          // Build order details
+          const orderLines = orders.slice(0, 5).map(o => {
+            const items = (o.line_items || []).map(li => `${li.title} x${li.quantity}`).join(', ');
+            const fuls = (o.fulfillments || []);
+            let tracking = 'No tracking';
+            if (fuls.length) {
+              const f = fuls[0];
+              tracking = `${f.tracking_company || 'Carrier'}: ${f.tracking_number || 'N/A'} (${f.status})`;
+              if (f.tracking_url) tracking += ` URL: ${f.tracking_url}`;
+            }
+            const oTags = (o.tags || '').toLowerCase();
+            const isSub = oTags.includes('subscription');
+            const subInfo = isSub ? ' [SUBSCRIPTION ORDER]' : '';
+            // Extract billing cycle from tags
+            let cycleInfo = '';
+            const cycleMatch = (o.tags || '').match(/Billing cycle #(\d+)/i);
+            if (cycleMatch) cycleInfo = ` Billing cycle #${cycleMatch[1]}`;
+            const deliveryMatch = (o.tags || '').match(/Deliver every (\d+ \w+)/i);
+            const deliveryInfo = deliveryMatch ? ` (every ${deliveryMatch[1]})` : '';
+            return `  ${o.name} | ${new Date(o.created_at).toLocaleDateString()} | $${o.total_price} | ${o.financial_status} | ${o.fulfillment_status || 'unfulfilled'}${subInfo}${cycleInfo}${deliveryInfo}\n    Items: ${items}\n    Tracking: ${tracking}`;
+          }).join('\n');
+
+          const prodList = Object.entries(products).map(([k, v]) => `  ${k}: ${v} total`).join('\n');
+
+          shopifyCtx = `SHOPIFY DATA FOR THIS CUSTOMER:
+Total Orders: ${totalOrders}
+Lifetime Value: $${totalSpent.toFixed(2)}
+Avg Order Value: $${totalOrders > 0 ? (totalSpent / totalOrders).toFixed(2) : '0.00'}
+Subscription Status: ${subStatus.toUpperCase()}
+Shopify Tags: ${shopCust.tags || 'None'}
+
+Products Purchased:
+${prodList || '  None'}
+
+Recent Orders (most recent first):
+${orderLines || '  No orders found'}`;
+        }
+      } catch (shopErr) {
+        console.error('Shopify lookup for draft failed:', shopErr.message);
+        shopifyCtx = 'Shopify lookup failed. Do not reference order data.';
+      }
+    }
+
     const kb = await loadKnowledgeBase();
     const msgs = (ticket.messages || [])
       .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
@@ -764,15 +837,6 @@ app.post('/api/tickets/:ticketId/draft', async (req, res) => {
       ? otherTickets.map(t => `- ${t.ticket_id}: ${t.subject} [${t.status}] Tags: ${(t.ai_tags||[]).join(', ')}`).join('\n')
       : 'No previous tickets';
 
-    const customerInfo = `Name: ${ticket.customer?.name || 'Unknown'}
-Email: ${ticket.customer?.email || ''}
-Phone: ${ticket.customer?.phone || 'Not provided'}
-Orders: ${ticket.customer?.shopify_order_count || 0}
-Lifetime Value: $${ticket.customer?.shopify_ltv || 0}
-Customer Tags: ${customerTags || 'None'}
-Ticket Count: ${ticket.customer?.ticket_count || 1}
-Previous Tickets:\n${historyCtx}`;
-
     const systemPrompt = `You are a customer support agent for TIPSY AF, a zero-proof functional beverage company. You are drafting a reply to a customer support ticket.
 
 # YOUR KNOWLEDGE BASE
@@ -787,7 +851,13 @@ ${kb}
 - Be helpful, warm, and solution-oriented.
 - Keep it concise. 3-5 short paragraphs max.
 - Lead with the answer or solution.
-- If there are previous tickets, reference relevant context naturally (don't say "I see in our records").`;
+- If there are previous tickets, reference relevant context naturally (don't say "I see in our records").
+- IMPORTANT: You have access to real Shopify order data below. USE IT in your reply when relevant:
+  - If asking about shipping/tracking: include their actual tracking number, carrier, and tracking URL.
+  - If asking about orders: reference their actual order numbers and items.
+  - If they're a subscriber: acknowledge their subscription status and billing cycle naturally.
+  - If they're a high-LTV customer: treat them as a valued customer, be extra attentive.
+  - Never say "let me look into this" when you already have the data. Just provide the answer.`;
 
     let userPrompt = `# TICKET DETAILS
 Ticket ID: ${ticket.ticket_id}
@@ -796,7 +866,13 @@ Purpose: ${ticket.purpose || 'General'}
 Priority: ${ticket.priority}
 
 # CUSTOMER INFO
-${customerInfo}
+Name: ${ticket.customer?.name || 'Unknown'}
+Email: ${ticket.customer?.email || ''}
+Phone: ${ticket.customer?.phone || 'Not provided'}
+Customer Tags: ${customerTags || 'None'}
+Previous Tickets:\n${historyCtx}
+
+# ${shopifyCtx}
 
 # CONVERSATION
 ${msgs}
@@ -1068,5 +1144,5 @@ app.post('/api/tickets/cleanup-transcript', async (req, res) => {
 
 
 app.listen(PORT, () => {
-  console.log(`🍄 TIPSY AF CS Backend v4 running on port ${PORT}`);
+  console.log(`🍄 TIPSY AF CS Backend v4.2 running on port ${PORT}`);
 });
