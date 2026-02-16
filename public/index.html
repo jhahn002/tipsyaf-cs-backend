@@ -170,6 +170,9 @@ function getTag(l){return TAG_COLORS[l]||{bg:"#F1F1F1",c:"#616161"};}
 function sel(){return S.tickets.find(t=>t.id===S.selId)||null;}
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function tagHTML(l){const s=getTag(l);return`<span class="tag" style="background:${s.bg};color:${s.c}">${l}</span>`;}
+function insertLink(){const text=prompt('Link text (e.g. "Manage Subscription"):');if(!text)return;const url=prompt('URL:');if(!url)return;const ta=document.getElementById('reply-ta');if(ta){const start=ta.selectionStart;const end=ta.selectionEnd;const before=ta.value.substring(0,start);const after=ta.value.substring(end);const link=`[${text}](${url})`;ta.value=before+link+after;S.reply=ta.value;ta.focus();ta.setSelectionRange(start+link.length,start+link.length);}}
+function insertSubLink(url){const ta=document.getElementById('reply-ta');if(ta){const start=ta.selectionStart;const link=`[Manage Your Subscription](${url})`;const before=ta.value.substring(0,start);const after=ta.value.substring(start);ta.value=before+link+after;S.reply=ta.value;ta.focus();}}
+function copyText(text,btn){navigator.clipboard.writeText(text).then(()=>{if(btn){const orig=btn.textContent;btn.textContent='✓ Copied!';setTimeout(()=>{btn.textContent=orig;},1500);}});}
 function openOrder(idx){S.orderFlyout=S.shopify?.orders?.[idx]||null;render();}
 function closeOrder(){S.orderFlyout=null;render();}
 function upd(o){Object.assign(S,o);render();}
@@ -273,6 +276,10 @@ function render(){
     const sh=S.shopify;const c=sh.customer;
     const subMap={active:'sub-active',paused:'sub-paused',cancelled:'sub-cancelled',lapsed:'sub-lapsed',none:'sub-none'};
     const subLabel={active:'Active Subscriber',paused:'Paused',cancelled:'Cancelled',lapsed:'Lapsed',none:'No Subscription'};
+    // Build subscription management URL
+    const subUrl=c.shopifyId?`https://tipsyaf.myshopify.com/account`:'';
+    const loopUrl=c.shopifyId?`https://manage.subscriptions.loop.so/customer-portal/${c.shopifyId}`:'';
+    const subManageUrl=loopUrl||subUrl;
     let prodsHTML='';const prods=Object.entries(c.productsPurchased||{});
     if(prods.length)prodsHTML=`<div class="products-list" style="margin-top:8px">${prods.map(([n,q])=>`<div class="product-item"><span class="product-name">${esc(n)}</span><span class="product-qty">×${q}</span></div>`).join('')}</div>`;
     const visibleOrders=S.showAllOrders?sh.orders:(sh.orders||[]).slice(0,5);
@@ -291,7 +298,7 @@ function render(){
       if(!S.showAllOrders&&hiddenCount>0)ordersHTML+=`<button class="show-more-btn" onclick="S.showAllOrders=true;render()">Show ${hiddenCount} more orders</button>`;
       else if(S.showAllOrders&&sh.orders.length>5)ordersHTML+=`<button class="show-more-btn" onclick="S.showAllOrders=false;render()">Show less</button>`;
     }else ordersHTML='<div style="color:var(--textTer);font-size:11px;font-style:italic">No orders</div>';
-    shopHTML=`<div style="margin-bottom:8px"><span class="sub-badge ${subMap[c.subscriptionStatus]||'sub-none'}">${subLabel[c.subscriptionStatus]||'—'}</span></div><div class="stat-cards"><div class="stat-card"><div class="stat-card-n">${c.totalOrders}</div><div class="stat-card-l">Orders</div></div><div class="stat-card"><div class="stat-card-n">$${c.totalSpent}</div><div class="stat-card-l">LTV</div></div><div class="stat-card"><div class="stat-card-n">$${c.avgOrderValue}</div><div class="stat-card-l">AOV</div></div></div>${prodsHTML}<div style="font-size:10px;font-weight:650;color:var(--textSec);text-transform:uppercase;margin:10px 0 6px;letter-spacing:0.3px">Recent Orders</div>${ordersHTML}`;
+    shopHTML=`<div style="margin-bottom:8px"><span class="sub-badge ${subMap[c.subscriptionStatus]||'sub-none'}">${subLabel[c.subscriptionStatus]||'—'}</span>${(c.subscriptionStatus==='active'||c.subscriptionStatus==='paused')&&subManageUrl?`<button onclick="copyText('${subManageUrl}',this)" style="margin-left:6px;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--priBord);background:var(--priSurf);color:var(--pri)">📋 Copy Sub URL</button><button onclick="insertSubLink('${subManageUrl}')" style="margin-left:4px;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--textSec)">+ Insert in Reply</button>`:''}</div><div class="stat-cards"><div class="stat-card"><div class="stat-card-n">${c.totalOrders}</div><div class="stat-card-l">Orders</div></div><div class="stat-card"><div class="stat-card-n">$${c.totalSpent}</div><div class="stat-card-l">LTV</div></div><div class="stat-card"><div class="stat-card-n">$${c.avgOrderValue}</div><div class="stat-card-l">AOV</div></div></div>${prodsHTML}<div style="font-size:10px;font-weight:650;color:var(--textSec);text-transform:uppercase;margin:10px 0 6px;letter-spacing:0.3px">Recent Orders</div>${ordersHTML}`;
   }else if(S.shopify&&!S.shopify.found)shopHTML='<div style="color:var(--textTer);font-size:11px;font-style:italic">Not in Shopify</div>';
   else shopHTML='<div style="color:var(--textTer);font-size:11px">—</div>';
 
@@ -301,7 +308,7 @@ function render(){
       <div class="center ${S.mobilePanel==='chat'?'mob-show':''}">
         <div class="thdr"><div class="thdr-meta"><button class="mobile-back" onclick="upd({mobilePanel:'list'})">← Back</button><span style="color:var(--textTer);font-size:12px;font-family:monospace">${t.id}</span><span class="sbadge" style="background:${sm.bg};color:${sm.c}">${sm.l}</span><div style="margin-left:auto;display:flex;gap:4px">${stBtns}</div></div><div class="thdr-title">${esc(t.subject)}</div>${t.aiSummary?`<div class="ai-sum"><span class="ai-sum-icon">✦</span><div class="ai-sum-text">${esc(t.aiSummary)}</div></div>`:''}</div>
         <div class="msgs">${msgs}</div>
-        <div class="reply-area">${ctxBox}<div class="reply-btns"><button class="rbtn ${S.showCtx?'ctx-on':''}" onclick="upd({showCtx:!S.showCtx})">💡 Context</button><button class="rbtn draft" onclick="doDraft()" ${S.drafting?'disabled':''}>${S.drafting?'✦ Drafting...':'✦ AI Draft'}</button></div><div class="ta-mic"><textarea class="reply-ta" id="reply-ta" placeholder="Type your reply..." oninput="S.reply=this.value">${esc(S.reply)}</textarea>${micHTML('reply-ta',true)}</div><div class="reply-footer"><span style="color:var(--textTer);font-size:11px">Replying as Lauren</span><button class="send-btn ${S.reply.trim()?'on':''}" onclick="doSend()">Send →</button></div></div>
+        <div class="reply-area">${ctxBox}<div class="reply-btns"><button class="rbtn ${S.showCtx?'ctx-on':''}" onclick="upd({showCtx:!S.showCtx})">💡 Context</button><button class="rbtn draft" onclick="doDraft()" ${S.drafting?'disabled':''}>${S.drafting?'✦ Drafting...':'✦ AI Draft'}</button><button class="rbtn" onclick="insertLink()">🔗 Link</button></div><div class="ta-mic"><textarea class="reply-ta" id="reply-ta" placeholder="Type your reply... Use [text](url) for links" oninput="S.reply=this.value">${esc(S.reply)}</textarea>${micHTML('reply-ta',true)}</div><div class="reply-footer"><span style="color:var(--textTer);font-size:11px">Replying as Lauren</span><button class="send-btn ${S.reply.trim()?'on':''}" onclick="doSend()">Send →</button></div></div>
       </div>
       <div class="right ${S.mobilePanel==='info'?'mob-show':''}">
         <button class="mobile-back" onclick="upd({mobilePanel:'chat'})" style="width:auto;padding:12px 16px;border-bottom:1px solid var(--borderLt)">← Back to chat</button>
