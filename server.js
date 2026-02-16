@@ -1,8 +1,9 @@
 // ============================================================
-// TIPSY AF — Customer Service Backend Server v4.2
+// TIPSY AF — Customer Service Backend Server v5
 // Features: Webhooks, tickets, KB, AI drafting with Shopify context,
 //           smart tagging, customer history, fuzzy matching, merge,
-//           threading, Shopify integration, Loop subscription detection
+//           threading, Shopify integration, Loop subscription detection,
+//           SendGrid email sending + inbound parse (2-way email)
 // Deploy to: Render.com
 // ============================================================
 
@@ -33,6 +34,41 @@ const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 // ---- Shopify Config ----
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE_URL || 'tipsyaf.myshopify.com';
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
+
+// ---- SendGrid Config ----
+const sgMail = require('@sendgrid/mail');
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
+if (SENDGRID_API_KEY) {
+  sgMail.setApiKey(SENDGRID_API_KEY);
+  console.log('📧 SendGrid configured');
+}
+const FROM_EMAIL = process.env.FROM_EMAIL || 'hey@gettipsyaf.com';
+const FROM_NAME = process.env.FROM_NAME || 'TIPSY AF Support';
+
+// Send email via SendGrid
+async function sendEmail({ to, subject, text, html, replyTo, headers }) {
+  if (!SENDGRID_API_KEY) {
+    console.log('⚠️ SendGrid not configured, skipping email send');
+    return null;
+  }
+  const msg = {
+    to,
+    from: { email: FROM_EMAIL, name: FROM_NAME },
+    subject,
+    text: text || '',
+    html: html || text || '',
+  };
+  if (replyTo) msg.replyTo = replyTo;
+  if (headers) msg.headers = headers;
+  try {
+    const result = await sgMail.send(msg);
+    console.log(`📧 Email sent to ${to}: ${subject}`);
+    return result;
+  } catch (err) {
+    console.error('❌ SendGrid error:', err.response?.body || err.message);
+    throw err;
+  }
+}
 
 async function shopifyAPI(endpoint, params = {}) {
   if (!SHOPIFY_TOKEN) throw new Error('SHOPIFY_ACCESS_TOKEN not configured');
@@ -281,7 +317,7 @@ async function findOpenTicketForCustomer(customerId) {
 // ============================================================
 
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'TIPSY AF CS Backend v4.2', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', service: 'TIPSY AF CS Backend v5', timestamp: new Date().toISOString() });
 });
 
 
@@ -416,6 +452,24 @@ app.post('/webhook/contact-form', async (req, res) => {
           content: `Thanks for reaching out! We've received your message and a team member will get back to you shortly. Your ticket number is ${ticketId}.`,
         });
 
+        // Send auto-reply email for contact form submissions
+        try {
+          await sendEmail({
+            to: email,
+            subject: `Re: ${purpose || 'Your message'} [${ticketId}]`,
+            text: `Hey ${first_name}!\n\nThanks for reaching out! We got your message and a team member will get back to you shortly.\n\nYour ticket number is ${ticketId}.\n\nLauren\nTIPSY AF Support`,
+            html: `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;max-width:580px;margin:0 auto;color:#1a1a1a;">
+              <p style="font-size:15px;line-height:1.7;">Hey ${first_name}!</p>
+              <p style="font-size:15px;line-height:1.7;">Thanks for reaching out! We got your message and a team member will get back to you shortly.</p>
+              <p style="font-size:15px;line-height:1.7;">Your ticket number is <strong>${ticketId}</strong>.</p>
+              <p style="font-size:15px;line-height:1.7;">Lauren<br><span style="color:#999;">TIPSY AF Support</span></p>
+              <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee;font-size:12px;color:#999;">Ref: ${ticketId}</div>
+            </div>`,
+          });
+        } catch (emailErr) {
+          console.error('❌ Contact form auto-reply email failed:', emailErr.message);
+        }
+
         console.log(`✅ New ticket: ${ticketId} from ${fullName} (${email}) — ${purpose} [match: ${matchType}]`);
       }
     }
@@ -431,6 +485,195 @@ app.post('/webhook/contact-form', async (req, res) => {
   } catch (error) {
     console.error('❌ Error:', error);
     res.status(500).json({ error: 'Failed to process submission', details: error.message });
+  }
+});
+
+
+// ============================================================
+// INBOUND EMAIL (SendGrid Inbound Parse)
+// ============================================================
+// Receives all emails sent to *@gettipsyaf.com
+// Threads replies onto existing tickets, creates new tickets for fresh emails
+
+app.post('/webhook/inbound-email', express.raw({ type: '*/*', limit: '25mb' }), async (req, res) => {
+  try {
+    // SendGrid sends multipart form data
+    const Busboy = require('busboy');
+    const fields = {};
+
+    await new Promise((resolve, reject) => {
+      const busboy = Busboy({ headers: req.headers });
+      busboy.on('field', (name, val) => { fields[name] = val; });
+      busboy.on('file', (name, file) => {
+        // Skip file attachments for now, consume the stream
+        file.resume();
+      });
+      busboy.on('finish', resolve);
+      busboy.on('error', reject);
+      busboy.end(req.body);
+    });
+
+    console.log('📨 Inbound email received');
+    console.log('  From:', fields.from);
+    console.log('  To:', fields.to);
+    console.log('  Subject:', fields.subject);
+
+    // Parse sender info
+    const fromRaw = fields.from || '';
+    const fromMatch = fromRaw.match(/(?:"?([^"]*)"?\s)?<?([^\s>]+@[^\s>]+)>?/);
+    const fromName = fromMatch ? (fromMatch[1] || fromMatch[2].split('@')[0]) : 'Unknown';
+    const fromEmail = fromMatch ? fromMatch[2].toLowerCase() : '';
+
+    if (!fromEmail) {
+      console.log('⚠️ Could not parse sender email, ignoring');
+      return res.status(200).send('OK');
+    }
+
+    // Ignore emails from ourselves (prevent loops)
+    if (fromEmail.includes('gettipsyaf.com')) {
+      console.log('⚠️ Ignoring email from our own domain');
+      return res.status(200).send('OK');
+    }
+
+    // Extract the email body (prefer text, strip signatures/quoted text)
+    let body = fields.text || fields.html || '';
+    // Strip quoted replies (lines starting with >)
+    body = body.split('\n').filter(line => !line.startsWith('>')).join('\n');
+    // Strip common reply headers
+    body = body.replace(/On .+ wrote:\s*$/gm, '').trim();
+    // Strip email signatures after common separators
+    body = body.split(/\n--\s*\n/)[0].trim();
+    body = body.split(/\n_{3,}\n/)[0].trim();
+    // If HTML only, strip tags
+    if (!fields.text && fields.html) {
+      body = body.replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    if (!body || body.length < 2) {
+      console.log('⚠️ Empty email body, ignoring');
+      return res.status(200).send('OK');
+    }
+
+    const subject = fields.subject || '(No subject)';
+
+    // Try to find existing ticket from subject line [TIX-XXXX]
+    const ticketMatch = subject.match(/\[?(TIX-\d+)\]?/i);
+    let existingTicket = null;
+
+    if (ticketMatch) {
+      const tid = ticketMatch[1].toUpperCase();
+      const { data } = await supabase.from('tickets')
+        .select('*, customer:customers(*)')
+        .eq('ticket_id', tid)
+        .single();
+      if (data) existingTicket = data;
+    }
+
+    // If no ticket ref in subject, try to find by customer email + open ticket
+    if (!existingTicket) {
+      const { customer } = await findOrCreateCustomer(fromEmail, null, fromName);
+      if (customer) {
+        const openTicket = await findOpenTicketForCustomer(customer.id);
+        if (openTicket) existingTicket = openTicket;
+      }
+    }
+
+    if (existingTicket) {
+      // Thread reply onto existing ticket
+      await supabase.from('messages').insert({
+        ticket_id: existingTicket.id,
+        sender_type: 'customer',
+        sender_name: fromName,
+        content: body,
+        metadata: { channel: 'email', original_subject: subject, from_email: fromEmail, threaded: true }
+      });
+
+      // Reopen if resolved/closed
+      if (existingTicket.status === 'resolved' || existingTicket.status === 'closed') {
+        await supabase.from('messages').insert({
+          ticket_id: existingTicket.id,
+          sender_type: 'system',
+          sender_name: 'System',
+          content: `Customer replied via email — ticket reopened.`,
+        });
+        await supabase.from('tickets').update({
+          status: 'open',
+          updated_at: new Date().toISOString(),
+        }).eq('id', existingTicket.id);
+        console.log(`🔓 Email reply reopened ${existingTicket.ticket_id}`);
+      } else {
+        await supabase.from('tickets').update({
+          status: 'open',
+          updated_at: new Date().toISOString(),
+        }).eq('id', existingTicket.id);
+      }
+
+      console.log(`🔄 Email reply threaded onto ${existingTicket.ticket_id} from ${fromName} <${fromEmail}>`);
+      return res.status(200).send('OK');
+    }
+
+    // No existing ticket — create a new one
+    const { customer } = await findOrCreateCustomer(fromEmail, null, fromName);
+    const autoTags = generateAutoTags('Other', body);
+    const priority = determinePriority('Other', body);
+    const ticketId = generateTicketId();
+    const summary = generateSummary('Email', body, fromName);
+
+    const { data: newTicket, error: ticketError } = await supabase
+      .from('tickets')
+      .insert({
+        ticket_id: ticketId,
+        customer_id: customer.id,
+        subject: subject.length > 80 ? subject.substring(0, 80) + '...' : subject,
+        status: 'open',
+        priority,
+        channel: 'email',
+        ai_tags: autoTags,
+        ai_summary: summary,
+        purpose: 'Other',
+      })
+      .select().single();
+
+    if (ticketError) throw ticketError;
+
+    await supabase.from('messages').insert({
+      ticket_id: newTicket.id,
+      sender_type: 'customer',
+      sender_name: fromName,
+      content: body,
+      metadata: { channel: 'email', original_subject: subject, from_email: fromEmail }
+    });
+
+    // Send auto-acknowledgment
+    try {
+      await sendEmail({
+        to: fromEmail,
+        subject: `Re: ${subject} [${ticketId}]`,
+        text: `Hey ${fromName.split(' ')[0]}!\n\nThanks for reaching out! We got your message and a team member will get back to you shortly.\n\nYour ticket number is ${ticketId}.\n\nLauren\nTIPSY AF Support`,
+        html: `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;max-width:580px;margin:0 auto;color:#1a1a1a;">
+          <p style="font-size:15px;line-height:1.7;">Hey ${fromName.split(' ')[0]}!</p>
+          <p style="font-size:15px;line-height:1.7;">Thanks for reaching out! We got your message and a team member will get back to you shortly.</p>
+          <p style="font-size:15px;line-height:1.7;">Your ticket number is <strong>${ticketId}</strong>.</p>
+          <p style="font-size:15px;line-height:1.7;">Lauren<br><span style="color:#999;">TIPSY AF Support</span></p>
+          <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee;font-size:12px;color:#999;">Ref: ${ticketId}</div>
+        </div>`,
+      });
+    } catch (emailErr) {
+      console.error('❌ Auto-reply email failed:', emailErr.message);
+    }
+
+    console.log(`✅ New email ticket: ${ticketId} from ${fromName} <${fromEmail}> — "${subject}"`);
+    res.status(200).send('OK');
+
+  } catch (error) {
+    console.error('❌ Inbound email error:', error);
+    // Always return 200 so SendGrid doesn't retry
+    res.status(200).send('OK');
   }
 });
 
@@ -532,12 +775,49 @@ app.post('/api/tickets/:ticketId/reply', async (req, res) => {
   try {
     const { content, sender_name = 'Lauren' } = req.body;
     if (!content) return res.status(400).json({ error: 'Reply content is required' });
-    const { data: ticket } = await supabase.from('tickets').select('id').eq('ticket_id', req.params.ticketId).single();
+    const { data: ticket } = await supabase.from('tickets')
+      .select('id, ticket_id, subject, customer:customers(email, name)')
+      .eq('ticket_id', req.params.ticketId).single();
     if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
-    const { error } = await supabase.from('messages').insert({ ticket_id: ticket.id, sender_type: 'agent', sender_name, content });
+
+    // Save message to DB
+    const { error } = await supabase.from('messages').insert({
+      ticket_id: ticket.id, sender_type: 'agent', sender_name, content
+    });
     if (error) throw error;
     await supabase.from('tickets').update({ updated_at: new Date().toISOString() }).eq('id', ticket.id);
-    res.json({ success: true });
+
+    // Send email to customer
+    let emailSent = false;
+    if (ticket.customer?.email) {
+      try {
+        // Build a clean HTML email
+        const htmlContent = `
+          <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;max-width:580px;margin:0 auto;color:#1a1a1a;">
+            <div style="white-space:pre-wrap;font-size:15px;line-height:1.7;color:#333;">${content.replace(/\n/g, '<br>')}</div>
+            <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee;font-size:12px;color:#999;">
+              Ref: ${ticket.ticket_id} — Reply to this email and we'll get it.
+            </div>
+          </div>`;
+
+        await sendEmail({
+          to: ticket.customer.email,
+          subject: `Re: ${ticket.subject} [${ticket.ticket_id}]`,
+          text: content + `\n\n---\nRef: ${ticket.ticket_id}`,
+          html: htmlContent,
+          // Custom header so we can thread replies back
+          headers: {
+            'X-Ticket-ID': ticket.ticket_id,
+          },
+        });
+        emailSent = true;
+      } catch (emailErr) {
+        console.error('❌ Email send failed:', emailErr.message);
+        // Don't fail the whole request — message is saved, email just didn't send
+      }
+    }
+
+    res.json({ success: true, emailSent });
   } catch (error) {
     res.status(500).json({ error: 'Failed to send reply', details: error.message });
   }
@@ -1148,5 +1428,5 @@ app.post('/api/tickets/cleanup-transcript', async (req, res) => {
 
 
 app.listen(PORT, () => {
-  console.log(`🍄 TIPSY AF CS Backend v4.2 running on port ${PORT}`);
+  console.log(`🍄 TIPSY AF CS Backend v5 running on port ${PORT}`);
 });
