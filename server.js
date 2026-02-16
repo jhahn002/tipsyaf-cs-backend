@@ -70,6 +70,33 @@ async function sendEmail({ to, subject, text, html, replyTo, headers }) {
   }
 }
 
+const LOGO_URL = 'https://cdn.shopify.com/s/files/1/0647/7696/2256/files/TIPSY_AF_Favicon.png?v=1764777564';
+
+function emailTemplate(bodyHTML, ticketId) {
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f6f6f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+  <div style="max-width:580px;margin:0 auto;padding:24px 16px;">
+    <div style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+      <div style="padding:20px 24px 16px;border-bottom:1px solid #f0f0f0;">
+        <img src="${LOGO_URL}" alt="TIPSY AF" width="36" height="36" style="width:36px;height:36px;border-radius:8px;vertical-align:middle;margin-right:10px;">
+        <span style="font-size:16px;font-weight:700;color:#1a1a1a;vertical-align:middle;">TIPSY AF</span>
+      </div>
+      <div style="padding:24px;font-size:15px;line-height:1.7;color:#333;">
+        ${bodyHTML}
+      </div>
+      <div style="padding:16px 24px;background:#fafafa;border-top:1px solid #f0f0f0;font-size:12px;color:#999;">
+        ${ticketId ? 'Ref: ' + ticketId + ' &middot; ' : ''}Reply to this email and we'll get it.
+      </div>
+    </div>
+    <div style="text-align:center;padding:16px;font-size:11px;color:#bbb;">
+      TIPSY AF &middot; Zero-Proof Functional Beverages<br>
+      <a href="https://gettipsy.com" style="color:#bbb;text-decoration:none;">gettipsy.com</a>
+    </div>
+  </div>
+</body></html>`;
+}
+
 async function shopifyAPI(endpoint, params = {}) {
   if (!SHOPIFY_TOKEN) throw new Error('SHOPIFY_ACCESS_TOKEN not configured');
   const qs = new URLSearchParams(params).toString();
@@ -454,17 +481,15 @@ app.post('/webhook/contact-form', async (req, res) => {
 
         // Send auto-reply email for contact form submissions
         try {
+          const autoBody = `<p>Hey ${first_name}!</p>
+            <p>Thanks for reaching out! We got your message and a team member will get back to you shortly.</p>
+            <p>Your ticket number is <strong>${ticketId}</strong>.</p>
+            <p>Lauren<br><span style="color:#999;">TIPSY AF Support</span></p>`;
           await sendEmail({
             to: email,
             subject: `Re: ${purpose || 'Your message'} [${ticketId}]`,
             text: `Hey ${first_name}!\n\nThanks for reaching out! We got your message and a team member will get back to you shortly.\n\nYour ticket number is ${ticketId}.\n\nLauren\nTIPSY AF Support`,
-            html: `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;max-width:580px;margin:0 auto;color:#1a1a1a;">
-              <p style="font-size:15px;line-height:1.7;">Hey ${first_name}!</p>
-              <p style="font-size:15px;line-height:1.7;">Thanks for reaching out! We got your message and a team member will get back to you shortly.</p>
-              <p style="font-size:15px;line-height:1.7;">Your ticket number is <strong>${ticketId}</strong>.</p>
-              <p style="font-size:15px;line-height:1.7;">Lauren<br><span style="color:#999;">TIPSY AF Support</span></p>
-              <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee;font-size:12px;color:#999;">Ref: ${ticketId}</div>
-            </div>`,
+            html: emailTemplate(autoBody, ticketId),
           });
         } catch (emailErr) {
           console.error('❌ Contact form auto-reply email failed:', emailErr.message);
@@ -651,17 +676,16 @@ app.post('/webhook/inbound-email', express.raw({ type: '*/*', limit: '25mb' }), 
 
     // Send auto-acknowledgment
     try {
+      const firstName = fromName.split(' ')[0];
+      const autoBody = `<p>Hey ${firstName}!</p>
+        <p>Thanks for reaching out! We got your message and a team member will get back to you shortly.</p>
+        <p>Your ticket number is <strong>${ticketId}</strong>.</p>
+        <p>Lauren<br><span style="color:#999;">TIPSY AF Support</span></p>`;
       await sendEmail({
         to: fromEmail,
         subject: `Re: ${subject} [${ticketId}]`,
-        text: `Hey ${fromName.split(' ')[0]}!\n\nThanks for reaching out! We got your message and a team member will get back to you shortly.\n\nYour ticket number is ${ticketId}.\n\nLauren\nTIPSY AF Support`,
-        html: `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;max-width:580px;margin:0 auto;color:#1a1a1a;">
-          <p style="font-size:15px;line-height:1.7;">Hey ${fromName.split(' ')[0]}!</p>
-          <p style="font-size:15px;line-height:1.7;">Thanks for reaching out! We got your message and a team member will get back to you shortly.</p>
-          <p style="font-size:15px;line-height:1.7;">Your ticket number is <strong>${ticketId}</strong>.</p>
-          <p style="font-size:15px;line-height:1.7;">Lauren<br><span style="color:#999;">TIPSY AF Support</span></p>
-          <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee;font-size:12px;color:#999;">Ref: ${ticketId}</div>
-        </div>`,
+        text: `Hey ${firstName}!\n\nThanks for reaching out! We got your message and a team member will get back to you shortly.\n\nYour ticket number is ${ticketId}.\n\nLauren\nTIPSY AF Support`,
+        html: emailTemplate(autoBody, ticketId),
       });
     } catch (emailErr) {
       console.error('❌ Auto-reply email failed:', emailErr.message);
@@ -791,21 +815,22 @@ app.post('/api/tickets/:ticketId/reply', async (req, res) => {
     let emailSent = false;
     if (ticket.customer?.email) {
       try {
-        // Build a clean HTML email
-        const htmlContent = `
-          <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;max-width:580px;margin:0 auto;color:#1a1a1a;">
-            <div style="white-space:pre-wrap;font-size:15px;line-height:1.7;color:#333;">${content.replace(/\n/g, '<br>')}</div>
-            <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee;font-size:12px;color:#999;">
-              Ref: ${ticket.ticket_id} — Reply to this email and we'll get it.
-            </div>
-          </div>`;
+        // Convert [text](url) markdown links to HTML
+        let bodyHTML = content
+          .replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" style="color:#2C6ECB;text-decoration:underline;">$1</a>')
+          .replace(/\n/g, '<br>');
+        const htmlContent = emailTemplate(bodyHTML, ticket.ticket_id);
+
+        // Plain text version: convert [text](url) to "text: url"
+        const plainText = content
+          .replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '$1: $2')
+          + `\n\n---\nRef: ${ticket.ticket_id}`;
 
         await sendEmail({
           to: ticket.customer.email,
           subject: `Re: ${ticket.subject} [${ticket.ticket_id}]`,
-          text: content + `\n\n---\nRef: ${ticket.ticket_id}`,
+          text: plainText,
           html: htmlContent,
-          // Custom header so we can thread replies back
           headers: {
             'X-Ticket-ID': ticket.ticket_id,
           },
