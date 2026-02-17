@@ -1227,7 +1227,7 @@ app.get('/api/shopify/customer', async (req, res) => {
       customer_id: c.id,
       status: 'any',
       limit: 20,
-      fields: 'id,name,created_at,total_price,financial_status,fulfillment_status,fulfillments,line_items,tags,note,cancelled_at',
+      fields: 'id,name,created_at,total_price,financial_status,fulfillment_status,fulfillments,line_items,tags,note,cancelled_at,refunds',
       order: 'created_at desc',
     });
     const orders = (orderData.orders || []).map(o => {
@@ -1253,9 +1253,22 @@ app.get('/api/shopify/customer', async (req, res) => {
       const tags = (o.tags || '').toLowerCase();
       const isSubscription = tags.includes('subscription') || tags.includes('loop') || tags.includes('recurring');
 
+      // Calculate total already refunded
+      let totalRefunded = 0;
+      if (o.refunds && o.refunds.length > 0) {
+        for (const refund of o.refunds) {
+          for (const tx of (refund.transactions || [])) {
+            if (tx.kind === 'refund' && tx.status === 'success') {
+              totalRefunded += parseFloat(tx.amount || '0');
+            }
+          }
+        }
+      }
+      const refundableAmount = Math.max(0, parseFloat(o.total_price) - totalRefunded);
+
       return {
         id: o.id,
-        name: o.name, // e.g. #1047
+        name: o.name,
         createdAt: o.created_at,
         total: o.total_price,
         financialStatus: o.financial_status,
@@ -1265,6 +1278,8 @@ app.get('/api/shopify/customer', async (req, res) => {
         items,
         isSubscription,
         tags: o.tags || '',
+        totalRefunded: totalRefunded.toFixed(2),
+        refundableAmount: refundableAmount.toFixed(2),
       };
     });
 
