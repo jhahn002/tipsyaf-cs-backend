@@ -156,7 +156,7 @@ function shortReason(p){const m={'Product Questions':'Product','Shipping & Deliv
 let S={tickets:[],selId:null,filter:"open",search:"",reply:"",ctx:"",showCtx:false,drafting:false,noteIn:"",loading:true,err:null,
   showKB:false,kbItems:[],kbTab:"all",kbAddOpen:false,kbEditId:null,kbNewTitle:"",kbNewContent:"",kbNewCat:"brand_voice",kbNewPri:5,
   custHistory:null,custHistoryLoading:false,custProfile:null,shopify:null,shopifyLoading:false,orderFlyout:null,showAllOrders:false,
-  view:"tickets" /* tickets | analytics */,mobilePanel:"list" /* list | chat | info */};
+  view:"tickets" /* tickets | analytics */,mobilePanel:"list" /* list | chat | info */,showRefund:false,refundType:'full',refundAmount:null,refundReason:'',refundNote:'',refunding:false};
 
 let recs={};
 function toggleMic(id,ap){if(recs[id]){recs[id].rec.stop();delete recs[id];render();return;}if(!('webkitSpeechRecognition' in window)&&!('SpeechRecognition' in window)){alert('Use Chrome.');return;}const SR=window.SpeechRecognition||window.webkitSpeechRecognition;const r=new SR();r.continuous=true;r.interimResults=true;r.lang='en-US';let fin='';r.onresult=e=>{let int='';for(let i=e.resultIndex;i<e.results.length;i++){if(e.results[i].isFinal)fin+=e.results[i][0].transcript+' ';else int+=e.results[i][0].transcript;}const el=document.getElementById(id);if(el){const b=ap?(el.getAttribute('data-base')||''):'';el.value=b+(b?' ':'')+fin+int;syncIn(id,el.value);}};r.onerror=()=>{delete recs[id];render();};r.onend=()=>{if(recs[id]){delete recs[id];if(fin.trim())cleanTx(id,fin.trim(),ap);render();}};const el=document.getElementById(id);if(el&&ap)el.setAttribute('data-base',el.value);recs[id]={rec:r};r.start();render();}
@@ -185,7 +185,62 @@ function renderOrderFlyout(){
   let trackHTML='<div style="color:var(--textTer);font-size:12px;font-style:italic">No tracking</div>';
   if(o.fulfillments?.length){const f=o.fulfillments[0];trackHTML=`<div class="of-tracking"><div class="of-tracking-carrier">📦 ${f.carrier||'Carrier'}</div><div class="of-tracking-num">${f.trackingNumber||'—'}</div><div style="font-size:11px;color:var(--textSec);margin-top:4px">Status: ${f.status}</div>${f.trackingUrl?`<a class="of-tracking-link" href="${f.trackingUrl}" target="_blank">Track Package →</a>`:''}</div>`;}
   const tags=(o.tags||'').split(',').map(t=>t.trim()).filter(t=>t);
-  return`<div class="order-flyout"><div class="of-header"><span style="font-size:20px">📦</span><span class="of-title">Order ${o.name}</span><button class="of-close" onclick="closeOrder()">×</button></div><div class="of-body"><div class="of-section"><div class="of-label">Details</div><div class="of-row"><span class="of-row-label">Date</span><span class="of-row-val">${fmtDate(o.createdAt)}</span></div><div class="of-row"><span class="of-row-label">Total</span><span class="of-row-val" style="font-size:15px">$${o.total}</span></div><div class="of-row"><span class="of-row-label">Payment</span><span class="of-row-val"><span class="order-status" style="background:${fs.bg};color:${fs.c}">${o.financialStatus}</span></span></div><div class="of-row"><span class="of-row-label">Fulfillment</span><span class="of-row-val" style="color:${fulSt==='Delivered'?'var(--succ)':'var(--warn)'}">${fulSt}</span></div>${o.isSubscription?'<div class="of-row"><span class="of-row-label">Type</span><span class="of-row-val" style="color:var(--pri)">🔄 Subscription</span></div>':''}</div><div class="of-section"><div class="of-label">Items</div>${items}</div><div class="of-section"><div class="of-label">Tracking</div>${trackHTML}</div>${tags.length?`<div class="of-section"><div class="of-label">Tags</div><div class="tags">${tags.map(t=>`<span class="tag" style="background:var(--bg);color:var(--textSec)">${esc(t)}</span>`).join('')}</div></div>`:''}</div></div>`;
+  const canRefund=o.financialStatus==='paid'||o.financialStatus==='partially_refunded';
+  const refundBtn=canRefund?`<div class="of-section"><button onclick="showRefund()" style="width:100%;padding:10px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid var(--critBord);background:var(--critSurf);color:var(--crit)">💰 Issue Refund</button></div>`:'';
+  const refundModal=S.showRefund?`<div class="of-section" style="background:var(--critSurf);border:1px solid var(--critBord);border-radius:8px;padding:14px">
+    <div style="font-size:13px;font-weight:700;color:var(--crit);margin-bottom:12px">⚠️ Refund Order ${o.name}</div>
+    <div style="margin-bottom:10px">
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button onclick="S.refundType='full';S.refundAmount=parseFloat('${o.total}');render()" style="flex:1;padding:8px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid ${S.refundType==='full'?'var(--crit)':'var(--border)'};background:${S.refundType==='full'?'var(--crit)':'var(--surface)'};color:${S.refundType==='full'?'#fff':'var(--textSec)'}">Full Refund ($${o.total})</button>
+        <button onclick="S.refundType='partial';render()" style="flex:1;padding:8px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid ${S.refundType==='partial'?'var(--crit)':'var(--border)'};background:${S.refundType==='partial'?'var(--crit)':'var(--surface)'};color:${S.refundType==='partial'?'#fff':'var(--textSec)'}">Partial Refund</button>
+      </div>
+      ${S.refundType==='partial'?`<div style="margin-bottom:8px"><label style="font-size:11px;font-weight:600;color:var(--textSec)">Amount ($)</label><input type="number" id="refund-amount" step="0.01" min="0.01" max="${o.total}" value="${S.refundAmount||''}" onchange="S.refundAmount=parseFloat(this.value)" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:14px;margin-top:4px;box-sizing:border-box"></div>`:''}
+      <div style="margin-bottom:8px"><label style="font-size:11px;font-weight:600;color:var(--textSec)">Reason</label><select id="refund-reason" onchange="S.refundReason=this.value" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:12px;margin-top:4px;box-sizing:border-box">
+        <option value="">Select reason...</option>
+        <option value="Customer request" ${S.refundReason==='Customer request'?'selected':''}>Customer request</option>
+        <option value="Product issue" ${S.refundReason==='Product issue'?'selected':''}>Product issue</option>
+        <option value="Shipping issue" ${S.refundReason==='Shipping issue'?'selected':''}>Shipping issue</option>
+        <option value="Wrong item" ${S.refundReason==='Wrong item'?'selected':''}>Wrong item</option>
+        <option value="Never received" ${S.refundReason==='Never received'?'selected':''}>Never received</option>
+        <option value="Duplicate order" ${S.refundReason==='Duplicate order'?'selected':''}>Duplicate order</option>
+        <option value="Other" ${S.refundReason==='Other'?'selected':''}>Other</option>
+      </select></div>
+      <div style="margin-bottom:12px"><label style="font-size:11px;font-weight:600;color:var(--textSec)">Note (optional)</label><input type="text" id="refund-note" placeholder="Additional details..." value="${esc(S.refundNote||'')}" onchange="S.refundNote=this.value" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:12px;margin-top:4px;box-sizing:border-box"></div>
+      <div style="background:#fff;border-radius:6px;padding:10px;margin-bottom:12px;border:1px solid var(--border)">
+        <div style="font-size:11px;font-weight:650;color:var(--textTer);text-transform:uppercase;margin-bottom:6px">Refund Summary</div>
+        <div style="display:flex;justify-content:space-between;font-size:14px"><span>Amount</span><span style="font-weight:700;color:var(--crit)">$${(S.refundType==='full'?parseFloat(o.total):S.refundAmount||0).toFixed(2)}</span></div>
+        <div style="font-size:11px;color:var(--textTer);margin-top:4px">→ Refunded to original payment method</div>
+        <div style="font-size:11px;color:var(--textTer)">→ Customer will be emailed confirmation</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onclick="S.showRefund=false;S.refundType='full';S.refundAmount=null;S.refundReason='';S.refundNote='';render()" style="flex:1;padding:10px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--textSec)">Cancel</button>
+        <button onclick="processRefund()" ${S.refunding?'disabled':''} style="flex:1;padding:10px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;border:none;background:var(--crit);color:#fff;opacity:${S.refunding?'0.6':'1'}">${S.refunding?'Processing...':'Confirm Refund'}</button>
+      </div>
+    </div>
+  </div>`:'';
+  return`<div class="order-flyout"><div class="of-header"><span style="font-size:20px">📦</span><span class="of-title">Order ${o.name}</span><button class="of-close" onclick="closeOrder()">×</button></div><div class="of-body"><div class="of-section"><div class="of-label">Details</div><div class="of-row"><span class="of-row-label">Date</span><span class="of-row-val">${fmtDate(o.createdAt)}</span></div><div class="of-row"><span class="of-row-label">Total</span><span class="of-row-val" style="font-size:15px">$${o.total}</span></div><div class="of-row"><span class="of-row-label">Payment</span><span class="of-row-val"><span class="order-status" style="background:${fs.bg};color:${fs.c}">${o.financialStatus}</span></span></div><div class="of-row"><span class="of-row-label">Fulfillment</span><span class="of-row-val" style="color:${fulSt==='Delivered'?'var(--succ)':'var(--warn)'}">${fulSt}</span></div>${o.isSubscription?'<div class="of-row"><span class="of-row-label">Type</span><span class="of-row-val" style="color:var(--pri)">🔄 Subscription</span></div>':''}</div><div class="of-section"><div class="of-label">Items</div>${items}</div><div class="of-section"><div class="of-label">Tracking</div>${trackHTML}</div>${tags.length?`<div class="of-section"><div class="of-label">Tags</div><div class="tags">${tags.map(t=>`<span class="tag" style="background:var(--bg);color:var(--textSec)">${esc(t)}</span>`).join('')}</div></div>`:''}${refundModal||refundBtn}</div></div>`;
+}
+function showRefund(){S.showRefund=true;S.refundType='full';S.refundAmount=parseFloat(S.orderFlyout.total);S.refundReason='';S.refundNote='';S.refunding=false;render();}
+async function processRefund(){
+  const o=S.orderFlyout;if(!o)return;
+  const amount=S.refundType==='full'?parseFloat(o.total):parseFloat(S.refundAmount);
+  if(!amount||amount<=0){alert('Please enter a valid refund amount');return;}
+  if(amount>parseFloat(o.total)){alert('Refund cannot exceed order total');return;}
+  if(!S.refundReason){alert('Please select a reason');return;}
+  if(!confirm(`Are you sure you want to refund $${amount.toFixed(2)} for order ${o.name}?\n\nThis cannot be undone.`))return;
+  S.refunding=true;render();
+  try{
+    const t=sel();
+    const r=await fetch(API+'/api/shopify/refund',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({orderId:o.shopifyOrderId||o.id,amount:amount,reason:S.refundReason,note:S.refundNote||'',ticketId:t?.id||'',customerEmail:t?.customer?.email||''})});
+    const d=await r.json();
+    if(d.success){
+      alert('✅ Refund processed! $'+amount.toFixed(2)+' refunded. Customer has been emailed.');
+      S.showRefund=false;S.orderFlyout=null;S.refunding=false;
+      // Add note to ticket
+      if(t){const nm={id:Date.now(),from:'system',name:'System',text:'💰 Refund processed: $'+amount.toFixed(2)+' for order '+o.name+' — Reason: '+S.refundReason,time:new Date().toISOString()};upd({tickets:S.tickets.map(x=>x.id===S.selId?{...x,messages:[...(x.messages||[]),nm]}:x)});}
+      if(t?.customer?.email)loadShopify(t.customer.email);
+    }else{alert('❌ Refund failed: '+(d.error||'Unknown error'));S.refunding=false;render();}
+  }catch(e){alert('❌ Refund error: '+e.message);S.refunding=false;render();}
 }
 
 // ---- ANALYTICS ----
