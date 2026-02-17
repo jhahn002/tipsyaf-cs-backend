@@ -1538,34 +1538,62 @@ app.get('/api/loop/customer/:shopifyId', async (req, res) => {
   try {
     if (!LOOP_API_TOKEN) return res.json({ found: false, error: 'Loop not configured' });
     const shopifyId = req.params.shopifyId;
+    console.log(`🔄 Loop: Fetching subscriptions for Shopify customer ${shopifyId}`);
 
-    // Get subscriptions for this customer
-    const subData = await loopAPI(`/customer/${shopifyId}/subscriptions`);
-    const subscriptions = (subData.data || subData.subscriptions || []).map(sub => ({
+    // Try the customer subscriptions endpoint
+    let subData;
+    try {
+      subData = await loopAPI(`/customer/${shopifyId}/subscription`);
+    } catch (e1) {
+      console.log(`🔄 Loop: /customer/${shopifyId}/subscription failed, trying /subscription?customerId=${shopifyId}`);
+      try {
+        subData = await loopAPI(`/subscription?customerId=${shopifyId}`);
+      } catch (e2) {
+        console.log(`🔄 Loop: Also failed, trying /customer/${shopifyId}`);
+        subData = await loopAPI(`/customer/${shopifyId}`);
+      }
+    }
+
+    console.log('🔄 Loop response keys:', Object.keys(subData || {}));
+
+    // Handle various response formats Loop might return
+    let rawSubs = subData.data || subData.subscriptions || [];
+    if (!Array.isArray(rawSubs)) rawSubs = rawSubs.subscriptions || [rawSubs]; // single sub or nested
+    if (!Array.isArray(rawSubs)) rawSubs = [];
+
+    const subscriptions = rawSubs.map(sub => ({
       id: sub.id,
-      shopifyId: sub.shopifySubscriptionId || sub.shopifyId,
+      shopifyId: sub.shopifyId || sub.shopifySubscriptionId,
       status: sub.status,
-      nextBillingDate: sub.nextBillingDate || sub.nextOrderDate,
-      frequency: sub.deliveryPolicy?.intervalCount
-        ? `Every ${sub.deliveryPolicy.intervalCount} ${sub.deliveryPolicy.interval || 'days'}`
-        : sub.frequency || 'Unknown',
+      nextBillingDate: sub.nextBillingDate || (sub.nextBillingDateEpoch ? new Date(sub.nextBillingDateEpoch * 1000).toISOString() : null),
+      frequency: sub.billingPolicy?.intervalCount
+        ? `Every ${sub.billingPolicy.intervalCount} ${(sub.billingPolicy.interval || 'MONTH').toLowerCase()}${sub.billingPolicy.intervalCount > 1 ? 's' : ''}`
+        : sub.deliveryPolicy?.intervalCount
+          ? `Every ${sub.deliveryPolicy.intervalCount} ${(sub.deliveryPolicy.interval || 'MONTH').toLowerCase()}${sub.deliveryPolicy.intervalCount > 1 ? 's' : ''}`
+          : 'Unknown',
       createdAt: sub.createdAt,
+      completedOrders: sub.completedOrdersCount || 0,
       lines: (sub.lines || []).map(l => ({
         title: l.title || l.productTitle,
         variant: l.variantTitle,
         quantity: l.quantity,
-        price: l.price?.amount || l.price || l.currentPrice,
+        price: l.currentPrice || l.price?.amount || l.price,
       })),
-      totalPrice: sub.totalPrice?.amount || sub.totalPrice,
-      discounts: sub.discounts || [],
+      totalPrice: sub.totalLineItemPrice || sub.totalLineItemDiscountedPrice || null,
+      deliveryPrice: sub.deliveryPrice || null,
+      currencyCode: sub.currencyCode || 'USD',
       billingPolicy: sub.billingPolicy,
       deliveryPolicy: sub.deliveryPolicy,
+      lastPaymentStatus: sub.lastPaymentStatus,
+      cancelledAt: sub.cancelledAt,
+      pausedAt: sub.pausedAt,
     }));
 
+    console.log(`🔄 Loop: Found ${subscriptions.length} subscriptions for customer ${shopifyId}`);
     res.json({ found: true, subscriptions });
   } catch (error) {
     console.error('❌ Loop customer lookup error:', error.message);
-    res.json({ found: false, error: error.message });
+    res.json({ found: false, error: error.message, subscriptions: [] });
   }
 });
 
