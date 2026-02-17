@@ -1371,6 +1371,123 @@ app.get('/api/shopify/order/:orderId', async (req, res) => {
   }
 });
 
+// ---- POST /api/shopify/refund ----
+// Process a refund for a Shopify order
+app.post('/api/shopify/refund', async (req, res) => {
+  try {
+    if (!SHOPIFY_TOKEN) return res.status(400).json({ error: 'Shopify not configured' });
+    const { orderId, amount, reason, note, ticketId, customerEmail } = req.body;
+
+    if (!orderId || !amount || !reason) {
+      return res.status(400).json({ error: 'orderId, amount, and reason are required' });
+    }
+
+    console.log(`💰 Processing refund: Order ${orderId}, $${amount}, reason: ${reason}`);
+
+    // First, get the order to find the transaction ID for refund
+    const orderData = await shopifyAPI(`orders/${orderId}`);
+    const order = orderData.order;
+    if (!order) return res.status(404).json({ error: 'Order not found in Shopify' });
+
+    // Get transactions to find the parent transaction for refund
+    const txData = await shopifyAPI(`orders/${orderId}/transactions`);
+    const transactions = txData.transactions || [];
+    // Find the capture/sale transaction to refund against
+    const parentTx = transactions.find(t =>
+      (t.kind === 'capture' || t.kind === 'sale') && t.status === 'success'
+    );
+
+    if (!parentTx) {
+      return res.status(400).json({ error: 'No refundable transaction found on this order' });
+    }
+
+    // Build the refund payload
+    const refundPayload = {
+      refund: {
+        currency: order.currency || 'USD',
+        notify: false, // We'll send our own branded email
+        note: `${reason}${note ? ': ' + note : ''} (via CS Dashboard${ticketId ? ', ' + ticketId : ''})`,
+        transactions: [{
+          parent_id: parentTx.id,
+          amount: parseFloat(amount).toFixed(2),
+          kind: 'refund',
+          gateway: parentTx.gateway,
+        }],
+      },
+    };
+
+    // Process the refund via Shopify API
+    const refundResult = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${orderId}/refunds.json`, {
+      method: 'POST',
+      headers: {
+        'X-Shopify-Access-Token': SHOPIFY_TOKEN,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(refundPayload),
+    });
+
+    const refundData = await refundResult.json();
+
+    if (!refundResult.ok || refundData.errors) {
+      console.error('❌ Shopify refund error:', refundData.errors || refundData);
+      return res.status(400).json({
+        error: 'Shopify refund failed',
+        details: typeof refundData.errors === 'string' ? refundData.errors : JSON.stringify(refundData.errors),
+      });
+    }
+
+    console.log(`✅ Refund processed: $${amount} for order ${order.name}`);
+
+    // Send refund confirmation email to customer
+    if (customerEmail) {
+      try {
+        const refundBody = `<p>Hey ${order.customer?.first_name || 'there'}!</p>
+          <p>We've processed a refund of <strong>$${parseFloat(amount).toFixed(2)}</strong> for your order <strong>${order.name}</strong>.</p>
+          <p>The refund should appear on your original payment method within 5 to 10 business days, depending on your bank.</p>
+          <p>If you have any questions, just reply to this email and we'll take care of it.</p>
+          <p>Lauren<br><span style="color:#999;">TIPSY AF Support</span></p>`;
+        await sendEmail({
+          to: customerEmail,
+          subject: `Refund Processed — Order ${order.name}${ticketId ? ' [' + ticketId + ']' : ''}`,
+          text: `Hey ${order.customer?.first_name || 'there'}!\n\nWe've processed a refund of $${parseFloat(amount).toFixed(2)} for your order ${order.name}.\n\nThe refund should appear on your original payment method within 5-10 business days.\n\nLauren\nTIPSY AF Support`,
+          html: emailTemplate(refundBody, ticketId),
+        });
+        console.log(`📧 Refund confirmation email sent to ${customerEmail}`);
+      } catch (emailErr) {
+        console.error('❌ Refund email failed:', emailErr.message);
+      }
+    }
+
+    // Log as note on ticket if provided
+    if (ticketId) {
+      try {
+        const { data: ticket } = await supabase.from('tickets')
+          .select('id').eq('ticket_id', ticketId).single();
+        if (ticket) {
+          await supabase.from('notes').insert({
+            ticket_id: ticket.id,
+            author: 'System',
+            content: `💰 Refund processed: $${parseFloat(amount).toFixed(2)} for order ${order.name}. Reason: ${reason}${note ? '. Note: ' + note : ''}`,
+          });
+        }
+      } catch (noteErr) {
+        console.error('Note insert failed:', noteErr.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      refund: refundData.refund,
+      amount: parseFloat(amount).toFixed(2),
+      orderName: order.name,
+    });
+
+  } catch (error) {
+    console.error('❌ Refund error:', error);
+    res.status(500).json({ error: 'Failed to process refund', details: error.message });
+  }
+});
+
 
 // ============================================================
 // KNOWLEDGE BASE
