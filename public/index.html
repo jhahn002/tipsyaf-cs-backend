@@ -277,9 +277,7 @@ function render(){
     const subMap={active:'sub-active',paused:'sub-paused',cancelled:'sub-cancelled',lapsed:'sub-lapsed',none:'sub-none'};
     const subLabel={active:'Active Subscriber',paused:'Paused',cancelled:'Cancelled',lapsed:'Lapsed',none:'No Subscription'};
     // Build subscription management URL
-    const subUrl=c.shopifyId?`https://tipsyaf.myshopify.com/account`:'';
-    const loopUrl=c.shopifyId?`https://manage.subscriptions.loop.so/customer-portal/${c.shopifyId}`:'';
-    const subManageUrl=loopUrl||subUrl;
+    const subManageUrl='https://gettipsy.com/a/loop_subscriptions/customer';
     let prodsHTML='';const prods=Object.entries(c.productsPurchased||{});
     if(prods.length)prodsHTML=`<div class="products-list" style="margin-top:8px">${prods.map(([n,q])=>`<div class="product-item"><span class="product-name">${esc(n)}</span><span class="product-qty">×${q}</span></div>`).join('')}</div>`;
     const visibleOrders=S.showAllOrders?sh.orders:(sh.orders||[]).slice(0,5);
