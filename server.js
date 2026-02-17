@@ -817,6 +817,19 @@ app.patch('/api/tickets/:ticketId/status', async (req, res) => {
   }
 });
 
+// ---- PATCH /api/tickets/:ticketId/priority ----
+app.patch('/api/tickets/:ticketId/priority', async (req, res) => {
+  try {
+    const { priority } = req.body;
+    if (!['low', 'normal', 'high', 'urgent'].includes(priority)) return res.status(400).json({ error: 'Invalid priority' });
+    const { error } = await supabase.from('tickets').update({ priority, updated_at: new Date().toISOString() }).eq('ticket_id', req.params.ticketId);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update priority', details: error.message });
+  }
+});
+
 
 // ---- POST /api/tickets/:ticketId/reply ----
 app.post('/api/tickets/:ticketId/reply', async (req, res) => {
