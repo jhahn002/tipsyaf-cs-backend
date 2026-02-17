@@ -46,7 +46,7 @@ async function loopAPI(endpoint, method = 'GET', body = null) {
   const opts = {
     method,
     headers: {
-      'x-api-token': LOOP_API_TOKEN,
+      'x-loop-token': LOOP_API_TOKEN,
       'Content-Type': 'application/json',
     },
   };
