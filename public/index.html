@@ -362,45 +362,68 @@ function render(){
     // Loop Subscription panel
     let loopHTML='';
     if(S.loopLoading)loopHTML='<div style="color:var(--textTer);font-size:11px;padding:4px 0">Loading subscriptions...</div>';
-    else if(S.loopSubs&&S.loopSubs.length>0){
+    else if(Array.isArray(S.loopSubs)&&S.loopSubs.length>0){
       loopHTML=S.loopSubs.map(sub=>{
         const stMap={ACTIVE:'sub-active',PAUSED:'sub-paused',CANCELLED:'sub-cancelled',EXPIRED:'sub-lapsed'};
         const stLabel={ACTIVE:'Active',PAUSED:'Paused',CANCELLED:'Cancelled',EXPIRED:'Expired'};
         const st=(sub.status||'').toUpperCase();
         const isActive=st==='ACTIVE';const isPaused=st==='PAUSED';const isCancelled=st==='CANCELLED';
-        const lines=(sub.lines||[]).map(l=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span>${esc(l.variant?l.title+' — '+l.variant:l.title)}</span><span style="color:var(--textSec)">×${l.quantity}</span></div>`).join('');
+        // Lines
+        const lines=(sub.lines||[]).map(l=>{
+          const name=l.variant&&l.variant!=='Default Title'?l.title+' — '+l.variant:l.title;
+          return`<div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span>${esc(name)}</span><span style="color:var(--textSec)">×${l.quantity}${l.price?' · $'+l.price:''}</span></div>`;
+        }).join('');
+        // Tenure
+        let tenure='';
+        if(sub.createdAt){const days=Math.floor((Date.now()-new Date(sub.createdAt).getTime())/(1000*60*60*24));tenure=days<30?days+' days':Math.floor(days/30)+' month'+(Math.floor(days/30)!==1?'s':'');}
+        // Next date
         const nextDate=sub.nextBillingDate?fmtDate(sub.nextBillingDate):'—';
-        const isLoading=S.loopAction===sub.id+'-pause'||S.loopAction===sub.id+'-resume'||S.loopAction===sub.id+'-cancel'||S.loopAction===sub.id+'-skipOrder';
+        // Loading state
+        const isLoading=S.loopAction&&S.loopAction.startsWith(sub.id+'-');
+        // Action buttons
         let actionBtns='';
-        if(isActive)actionBtns=`<div style="display:flex;gap:4px;flex-wrap:wrap">
-          <button onclick="loopAction('${sub.id}','skipOrder','skip next order')" ${isLoading?'disabled':''} style="padding:3px 8px;border-radius:8px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--priBord);background:var(--priSurf);color:var(--pri)">⏭ Skip Next</button>
-          <button onclick="loopAction('${sub.id}','pause','pause')" ${isLoading?'disabled':''} style="padding:3px 8px;border-radius:8px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--warnBord);background:var(--warnSurf);color:var(--warn)">⏸ Pause</button>
-          <button onclick="loopAction('${sub.id}','cancel','cancel')" ${isLoading?'disabled':''} style="padding:3px 8px;border-radius:8px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--critBord);background:var(--critSurf);color:var(--crit)">✕ Cancel</button>
+        if(isActive)actionBtns=`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px">
+          <button onclick="loopAction('${sub.id}','skipOrder','skip next order')" ${isLoading?'disabled':''} style="padding:4px 10px;border-radius:8px;font-size:10px;font-weight:600;cursor:pointer;border:1px solid var(--priBord);background:var(--priSurf);color:var(--pri)">⏭ Skip Next</button>
+          <button onclick="loopAction('${sub.id}','pause','pause')" ${isLoading?'disabled':''} style="padding:4px 10px;border-radius:8px;font-size:10px;font-weight:600;cursor:pointer;border:1px solid var(--warnBord);background:var(--warnSurf);color:var(--warn)">⏸ Pause</button>
+          <button onclick="loopAction('${sub.id}','cancel','cancel')" ${isLoading?'disabled':''} style="padding:4px 10px;border-radius:8px;font-size:10px;font-weight:600;cursor:pointer;border:1px solid var(--critBord);background:var(--critSurf);color:var(--crit)">✕ Cancel</button>
         </div>`;
-        else if(isPaused)actionBtns=`<div style="display:flex;gap:4px">
-          <button onclick="loopAction('${sub.id}','resume','resume')" ${isLoading?'disabled':''} style="padding:3px 8px;border-radius:8px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--succBord);background:var(--succSurf);color:var(--succ)">▶ Resume</button>
-          <button onclick="loopAction('${sub.id}','cancel','cancel')" ${isLoading?'disabled':''} style="padding:3px 8px;border-radius:8px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--critBord);background:var(--critSurf);color:var(--crit)">✕ Cancel</button>
+        else if(isPaused)actionBtns=`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px">
+          <button onclick="loopAction('${sub.id}','resume','resume')" ${isLoading?'disabled':''} style="padding:4px 10px;border-radius:8px;font-size:10px;font-weight:600;cursor:pointer;border:1px solid var(--succBord);background:var(--succSurf);color:var(--succ)">▶ Resume</button>
+          <button onclick="loopAction('${sub.id}','cancel','cancel')" ${isLoading?'disabled':''} style="padding:4px 10px;border-radius:8px;font-size:10px;font-weight:600;cursor:pointer;border:1px solid var(--critBord);background:var(--critSurf);color:var(--crit)">✕ Cancel</button>
         </div>`;
-        return`<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:6px">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        // Payment status
+        const payStatus=sub.lastPaymentStatus==='SUCCESS'?'<span style="color:var(--succ)">✓ Paid</span>':sub.lastPaymentStatus==='FAILED'?'<span style="color:var(--crit)">✗ Failed</span>':'<span style="color:var(--textTer)">—</span>';
+        // Paused date
+        const pausedInfo=isPaused&&sub.pausedAt?`<div style="display:flex;justify-content:space-between;font-size:11px;margin-top:2px"><span style="color:var(--warn)">Paused since</span><span style="font-weight:600;color:var(--warn)">${fmtDate(sub.pausedAt)}</span></div>`:'';
+        const cancelInfo=isCancelled&&sub.cancelledAt?`<div style="display:flex;justify-content:space-between;font-size:11px;margin-top:2px"><span style="color:var(--crit)">Cancelled</span><span style="font-weight:600;color:var(--crit)">${fmtDate(sub.cancelledAt)}</span></div>`:'';
+        return`<div style="background:var(--bg);border:1px solid ${isActive?'var(--succBord)':isPaused?'var(--warnBord)':isCancelled?'var(--critBord)':'var(--border)'};border-radius:8px;padding:10px;margin-bottom:6px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <span class="sub-badge ${stMap[st]||'sub-none'}">${stLabel[st]||st}</span>
-            <span style="font-size:10px;color:var(--textTer)">${sub.frequency||''}</span>
+            <span style="font-size:10px;color:var(--textTer)">#${sub.shopifyId||sub.id}</span>
           </div>
           ${lines}
-          ${(isActive||isPaused)?`<div style="display:flex;justify-content:space-between;font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid var(--borderLt)"><span style="color:var(--textSec)">Next order</span><span style="font-weight:600">${nextDate}</span></div>`:''}
-          ${sub.totalPrice?`<div style="display:flex;justify-content:space-between;font-size:11px;margin-top:2px"><span style="color:var(--textSec)">Total</span><span style="font-weight:600">$${sub.totalPrice}</span></div>`:''}
-          <div style="margin-top:8px">${actionBtns}</div>
+          <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--borderLt);font-size:11px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="color:var(--textSec)">Frequency</span><span style="font-weight:600">${sub.frequency||'—'}</span></div>
+            ${isActive?`<div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="color:var(--textSec)">Next order</span><span style="font-weight:600">${nextDate}</span></div>`:''}
+            <div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="color:var(--textSec)">Subscribed</span><span style="font-weight:600">${tenure||'—'}${sub.createdAt?' ('+fmtDate(sub.createdAt)+')':''}</span></div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="color:var(--textSec)">Orders completed</span><span style="font-weight:600">${sub.completedOrders||0}</span></div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="color:var(--textSec)">Last payment</span><span style="font-weight:600">${payStatus}</span></div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="color:var(--textSec)">Total/order</span><span style="font-weight:600">$${(sub.totalPrice||0).toFixed(2)}${sub.deliveryPrice?' + $'+sub.deliveryPrice.toFixed(2)+' ship':''}</span></div>
+            ${pausedInfo}${cancelInfo}
+          </div>
+          ${actionBtns}
         </div>`;
       }).join('');
       // Portal link buttons
       const sid=sh.customer?.shopifyId||sh.shopifyId;
       loopHTML+=`<div style="display:flex;gap:4px;margin-top:6px">
-        <button onclick="loopPortalLink('${sid}')" style="flex:1;padding:5px;border-radius:8px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--priBord);background:var(--priSurf);color:var(--pri)">📋 Copy Portal Link</button>
-        <button onclick="loopInsertPortalLink('${sid}')" style="flex:1;padding:5px;border-radius:8px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--textSec)">+ Insert in Reply</button>
+        <button onclick="loopPortalLink('${sid}')" style="flex:1;padding:6px;border-radius:8px;font-size:10px;font-weight:600;cursor:pointer;border:1px solid var(--priBord);background:var(--priSurf);color:var(--pri)">📋 Copy Portal Link</button>
+        <button onclick="loopInsertPortalLink('${sid}')" style="flex:1;padding:6px;border-radius:8px;font-size:10px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--textSec)">+ Insert in Reply</button>
       </div>`;
-    }else if(S.loopSubs&&S.loopSubs.length===0){
+    }else if(Array.isArray(S.loopSubs)&&S.loopSubs.length===0){
       loopHTML=`<span class="sub-badge sub-none">No Subscription</span>`;
     }else{
+      // Loop hasn't loaded yet or failed — show Shopify tag-based status as fallback
       loopHTML=`<span class="sub-badge ${subMap[c.subscriptionStatus]||'sub-none'}">${subLabel[c.subscriptionStatus]||'—'}</span>`;
     }
     let prodsHTML='';const prods=Object.entries(c.productsPurchased||{});
