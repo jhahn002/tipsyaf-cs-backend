@@ -35,6 +35,30 @@ const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE_URL || 'tipsyaf.myshopify.com';
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
+// ---- Loop Subscriptions Config ----
+const LOOP_API_TOKEN = process.env.LOOP_API_TOKEN;
+const LOOP_API_BASE = 'https://api.loopsubscriptions.com/admin/2023-10';
+if (LOOP_API_TOKEN) console.log('🔄 Loop Subscriptions API configured');
+
+async function loopAPI(endpoint, method = 'GET', body = null) {
+  if (!LOOP_API_TOKEN) throw new Error('LOOP_API_TOKEN not configured');
+  const url = `${LOOP_API_BASE}${endpoint}`;
+  const opts = {
+    method,
+    headers: {
+      'x-api-token': LOOP_API_TOKEN,
+      'Content-Type': 'application/json',
+    },
+  };
+  if (body && method !== 'GET') opts.body = JSON.stringify(body);
+  const res = await fetch(url, opts);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Loop API ${res.status}: ${err}`);
+  }
+  return res.json();
+}
+
 // ---- SendGrid Config ----
 const sgMail = require('@sendgrid/mail');
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
@@ -1500,6 +1524,111 @@ app.post('/api/shopify/refund', async (req, res) => {
   } catch (error) {
     console.error('❌ Refund error:', error);
     res.status(500).json({ error: 'Failed to process refund', details: error.message });
+  }
+});
+
+
+// ============================================================
+// LOOP SUBSCRIPTIONS INTEGRATION
+// ============================================================
+
+// ---- GET /api/loop/customer/:shopifyId ----
+// Get all subscriptions for a customer by Shopify customer ID
+app.get('/api/loop/customer/:shopifyId', async (req, res) => {
+  try {
+    if (!LOOP_API_TOKEN) return res.json({ found: false, error: 'Loop not configured' });
+    const shopifyId = req.params.shopifyId;
+
+    // Get subscriptions for this customer
+    const subData = await loopAPI(`/customer/${shopifyId}/subscriptions`);
+    const subscriptions = (subData.data || subData.subscriptions || []).map(sub => ({
+      id: sub.id,
+      shopifyId: sub.shopifySubscriptionId || sub.shopifyId,
+      status: sub.status,
+      nextBillingDate: sub.nextBillingDate || sub.nextOrderDate,
+      frequency: sub.deliveryPolicy?.intervalCount
+        ? `Every ${sub.deliveryPolicy.intervalCount} ${sub.deliveryPolicy.interval || 'days'}`
+        : sub.frequency || 'Unknown',
+      createdAt: sub.createdAt,
+      lines: (sub.lines || []).map(l => ({
+        title: l.title || l.productTitle,
+        variant: l.variantTitle,
+        quantity: l.quantity,
+        price: l.price?.amount || l.price || l.currentPrice,
+      })),
+      totalPrice: sub.totalPrice?.amount || sub.totalPrice,
+      discounts: sub.discounts || [],
+      billingPolicy: sub.billingPolicy,
+      deliveryPolicy: sub.deliveryPolicy,
+    }));
+
+    res.json({ found: true, subscriptions });
+  } catch (error) {
+    console.error('❌ Loop customer lookup error:', error.message);
+    res.json({ found: false, error: error.message });
+  }
+});
+
+// ---- POST /api/loop/session-token/:shopifyId ----
+// Generate a customer portal session token (magic link)
+app.post('/api/loop/session-token/:shopifyId', async (req, res) => {
+  try {
+    if (!LOOP_API_TOKEN) return res.status(400).json({ error: 'Loop not configured' });
+    const data = await loopAPI(`/customer/${req.params.shopifyId}/sessionToken`, 'POST');
+    // Build the portal URL with the session token
+    const sessionToken = data.sessionToken || data.token || data.data?.sessionToken;
+    if (!sessionToken) {
+      return res.status(400).json({ error: 'Could not generate session token', raw: data });
+    }
+    const portalUrl = `https://gettipsy.com/a/loop_subscriptions/customer?sessionToken=${sessionToken}`;
+    res.json({ success: true, portalUrl, sessionToken });
+  } catch (error) {
+    console.error('❌ Loop session token error:', error.message);
+    res.status(500).json({ error: 'Failed to generate portal link', details: error.message });
+  }
+});
+
+// ---- POST /api/loop/subscription/:id/pause ----
+app.post('/api/loop/subscription/:id/pause', async (req, res) => {
+  try {
+    if (!LOOP_API_TOKEN) return res.status(400).json({ error: 'Loop not configured' });
+    const data = await loopAPI(`/subscription/${req.params.id}/pause`, 'POST', req.body || {});
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to pause subscription', details: error.message });
+  }
+});
+
+// ---- POST /api/loop/subscription/:id/resume ----
+app.post('/api/loop/subscription/:id/resume', async (req, res) => {
+  try {
+    if (!LOOP_API_TOKEN) return res.status(400).json({ error: 'Loop not configured' });
+    const data = await loopAPI(`/subscription/${req.params.id}/resume`, 'POST');
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to resume subscription', details: error.message });
+  }
+});
+
+// ---- POST /api/loop/subscription/:id/cancel ----
+app.post('/api/loop/subscription/:id/cancel', async (req, res) => {
+  try {
+    if (!LOOP_API_TOKEN) return res.status(400).json({ error: 'Loop not configured' });
+    const data = await loopAPI(`/subscription/${req.params.id}/cancel`, 'POST', req.body || {});
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to cancel subscription', details: error.message });
+  }
+});
+
+// ---- POST /api/loop/subscription/:id/skipOrder ----
+app.post('/api/loop/subscription/:id/skipOrder', async (req, res) => {
+  try {
+    if (!LOOP_API_TOKEN) return res.status(400).json({ error: 'Loop not configured' });
+    const data = await loopAPI(`/subscription/${req.params.id}/skipOrder`, 'POST');
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to skip order', details: error.message });
   }
 });
 
