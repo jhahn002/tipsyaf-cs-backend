@@ -9,7 +9,7 @@
 <title>TIPSY AF — Support Dashboard</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-:root{--bg:#F6F6F7;--surface:#fff;--surfHov:#F9FAFB;--surfSel:#F2F7FE;--border:#E3E3E8;--borderLt:#EFEFEF;--text:#1A1A1A;--textSec:#616161;--textTer:#8C8C8C;--textDis:#B5B5B5;--pri:#2C6ECB;--priSurf:#F2F7FE;--priBord:#B4D1F0;--crit:#D72C0D;--critSurf:#FFF4F4;--warn:#B98900;--warnSurf:#FFF8E6;--succ:#008060;--succSurf:#F1F8F5;--hi:#5C6AC4;--hiSurf:#F4F5FA;--r:8px;--rs:6px;--custBubble:#E9E9EB;--agentBubble:#2C6ECB}
+:root{--bg:#F6F6F7;--surface:#fff;--surfHov:#F9FAFB;--surfSel:#F2F7FE;--border:#E3E3E8;--borderLt:#EFEFEF;--text:#1A1A1A;--textSec:#616161;--textTer:#8C8C8C;--textDis:#B5B5B5;--pri:#2C6ECB;--priSurf:#F2F7FE;--priBord:#B4D1F0;--crit:#D72C0D;--critSurf:#FFF4F4;--critBord:#FBBCB1;--warn:#B98900;--warnSurf:#FFF8E6;--warnBord:#E8D48A;--succ:#008060;--succSurf:#F1F8F5;--succBord:#95D5B2;--hi:#5C6AC4;--hiSurf:#F4F5FA;--r:8px;--rs:6px;--custBubble:#E9E9EB;--agentBubble:#2C6ECB}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);height:100vh;overflow:hidden;display:flex;flex-direction:column}
 button,input,textarea,select{font-family:inherit}
 /* LAYOUT: header fixed 52px, main fills rest */
@@ -156,7 +156,7 @@ function shortReason(p){const m={'Product Questions':'Product','Shipping & Deliv
 let S={tickets:[],selId:null,filter:"open",search:"",reply:"",ctx:"",showCtx:false,drafting:false,noteIn:"",loading:true,err:null,
   showKB:false,kbItems:[],kbTab:"all",kbAddOpen:false,kbEditId:null,kbNewTitle:"",kbNewContent:"",kbNewCat:"brand_voice",kbNewPri:5,
   custHistory:null,custHistoryLoading:false,custProfile:null,shopify:null,shopifyLoading:false,orderFlyout:null,showAllOrders:false,
-  view:"tickets" /* tickets | analytics */,mobilePanel:"list" /* list | chat | info */,showRefund:false,refundType:'full',refundAmount:null,refundReason:'',refundNote:'',refunding:false};
+  view:"tickets" /* tickets | analytics */,mobilePanel:"list" /* list | chat | info */,showRefund:false,refundType:'full',refundAmount:null,refundReason:'',refundNote:'',refunding:false,loopSubs:null,loopLoading:false,loopAction:null};
 
 let recs={};
 function toggleMic(id,ap){if(recs[id]){recs[id].rec.stop();delete recs[id];render();return;}if(!('webkitSpeechRecognition' in window)&&!('SpeechRecognition' in window)){alert('Use Chrome.');return;}const SR=window.SpeechRecognition||window.webkitSpeechRecognition;const r=new SR();r.continuous=true;r.interimResults=true;r.lang='en-US';let fin='';r.onresult=e=>{let int='';for(let i=e.resultIndex;i<e.results.length;i++){if(e.results[i].isFinal)fin+=e.results[i][0].transcript+' ';else int+=e.results[i][0].transcript;}const el=document.getElementById(id);if(el){const b=ap?(el.getAttribute('data-base')||''):'';el.value=b+(b?' ':'')+fin+int;syncIn(id,el.value);}};r.onerror=()=>{delete recs[id];render();};r.onend=()=>{if(recs[id]){delete recs[id];if(fin.trim())cleanTx(id,fin.trim(),ap);render();}};const el=document.getElementById(id);if(el&&ap)el.setAttribute('data-base',el.value);recs[id]={rec:r};r.start();render();}
@@ -172,6 +172,29 @@ function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace
 function tagHTML(l){const s=getTag(l);return`<span class="tag" style="background:${s.bg};color:${s.c}">${l}</span>`;}
 function insertLink(){const text=prompt('Link text (e.g. "Manage Subscription"):');if(!text)return;const url=prompt('URL:');if(!url)return;const ta=document.getElementById('reply-ta');if(ta){const start=ta.selectionStart;const end=ta.selectionEnd;const before=ta.value.substring(0,start);const after=ta.value.substring(end);const link=`[${text}](${url})`;ta.value=before+link+after;S.reply=ta.value;ta.focus();ta.setSelectionRange(start+link.length,start+link.length);}}
 function insertSubLink(url){const ta=document.getElementById('reply-ta');if(ta){const start=ta.selectionStart;const link=`[Manage Your Subscription](${url})`;const before=ta.value.substring(0,start);const after=ta.value.substring(start);ta.value=before+link+after;S.reply=ta.value;ta.focus();}}
+async function loopPortalLink(shopifyId){
+  try{const r=await fetch(API+'/api/loop/session-token/'+shopifyId,{method:'POST'});const d=await r.json();
+  if(d.success&&d.portalUrl){copyText(d.portalUrl);alert('✅ Portal link copied to clipboard!\n\nThis is a magic link that logs them directly into their subscription portal. Valid for 24 hours.');}
+  else{alert('❌ Could not generate portal link: '+(d.error||'Unknown error'));}
+  }catch(e){alert('❌ Error: '+e.message);}
+}
+async function loopInsertPortalLink(shopifyId){
+  try{const r=await fetch(API+'/api/loop/session-token/'+shopifyId,{method:'POST'});const d=await r.json();
+  if(d.success&&d.portalUrl){const ta=document.getElementById('reply-ta');if(ta){const link=`[Manage Your Subscription](${d.portalUrl})`;const before=ta.value.substring(0,ta.selectionStart);const after=ta.value.substring(ta.selectionStart);ta.value=before+link+after;S.reply=ta.value;ta.focus();}}
+  else{alert('❌ Could not generate portal link: '+(d.error||'Unknown error'));}
+  }catch(e){alert('❌ Error: '+e.message);}
+}
+async function loopAction(subId,action,label){
+  if(!confirm(`Are you sure you want to ${label} this subscription?`))return;
+  S.loopAction=subId+'-'+action;render();
+  try{const r=await fetch(API+'/api/loop/subscription/'+subId+'/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});const d=await r.json();
+  if(d.success){alert('✅ Subscription '+label+'d successfully!');const t=sel();if(t?.customer?.email)loadShopify(t.customer.email);
+    // Log to ticket
+    if(t){const nm={id:Date.now(),from:'system',name:'System',text:'🔄 Subscription '+label+'d (Sub ID: '+subId+')',time:new Date().toISOString()};upd({tickets:S.tickets.map(x=>x.id===S.selId?{...x,messages:[...(x.messages||[]),nm]}:x)});}
+  }else{alert('❌ Failed: '+(d.error||d.details||'Unknown error'));}
+  S.loopAction=null;render();
+  }catch(e){alert('❌ Error: '+e.message);S.loopAction=null;render();}
+}
 function copyText(text,btn){navigator.clipboard.writeText(text).then(()=>{if(btn){const orig=btn.textContent;btn.textContent='✓ Copied!';setTimeout(()=>{btn.textContent=orig;},1500);}});}
 function openOrder(idx){S.orderFlyout=S.shopify?.orders?.[idx]||null;render();}
 function closeOrder(){S.orderFlyout=null;render();}
@@ -336,8 +359,50 @@ function render(){
     const sh=S.shopify;const c=sh.customer;
     const subMap={active:'sub-active',paused:'sub-paused',cancelled:'sub-cancelled',lapsed:'sub-lapsed',none:'sub-none'};
     const subLabel={active:'Active Subscriber',paused:'Paused',cancelled:'Cancelled',lapsed:'Lapsed',none:'No Subscription'};
-    // Build subscription management URL
-    const subManageUrl='https://gettipsy.com/a/loop_subscriptions/customer';
+    // Loop Subscription panel
+    let loopHTML='';
+    if(S.loopLoading)loopHTML='<div style="color:var(--textTer);font-size:11px;padding:4px 0">Loading subscriptions...</div>';
+    else if(S.loopSubs&&S.loopSubs.length>0){
+      loopHTML=S.loopSubs.map(sub=>{
+        const stMap={ACTIVE:'sub-active',PAUSED:'sub-paused',CANCELLED:'sub-cancelled',EXPIRED:'sub-lapsed'};
+        const stLabel={ACTIVE:'Active',PAUSED:'Paused',CANCELLED:'Cancelled',EXPIRED:'Expired'};
+        const st=(sub.status||'').toUpperCase();
+        const isActive=st==='ACTIVE';const isPaused=st==='PAUSED';const isCancelled=st==='CANCELLED';
+        const lines=(sub.lines||[]).map(l=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0"><span>${esc(l.variant?l.title+' — '+l.variant:l.title)}</span><span style="color:var(--textSec)">×${l.quantity}</span></div>`).join('');
+        const nextDate=sub.nextBillingDate?fmtDate(sub.nextBillingDate):'—';
+        const isLoading=S.loopAction===sub.id+'-pause'||S.loopAction===sub.id+'-resume'||S.loopAction===sub.id+'-cancel'||S.loopAction===sub.id+'-skipOrder';
+        let actionBtns='';
+        if(isActive)actionBtns=`<div style="display:flex;gap:4px;flex-wrap:wrap">
+          <button onclick="loopAction('${sub.id}','skipOrder','skip next order')" ${isLoading?'disabled':''} style="padding:3px 8px;border-radius:8px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--priBord);background:var(--priSurf);color:var(--pri)">⏭ Skip Next</button>
+          <button onclick="loopAction('${sub.id}','pause','pause')" ${isLoading?'disabled':''} style="padding:3px 8px;border-radius:8px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--warnBord);background:var(--warnSurf);color:var(--warn)">⏸ Pause</button>
+          <button onclick="loopAction('${sub.id}','cancel','cancel')" ${isLoading?'disabled':''} style="padding:3px 8px;border-radius:8px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--critBord);background:var(--critSurf);color:var(--crit)">✕ Cancel</button>
+        </div>`;
+        else if(isPaused)actionBtns=`<div style="display:flex;gap:4px">
+          <button onclick="loopAction('${sub.id}','resume','resume')" ${isLoading?'disabled':''} style="padding:3px 8px;border-radius:8px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--succBord);background:var(--succSurf);color:var(--succ)">▶ Resume</button>
+          <button onclick="loopAction('${sub.id}','cancel','cancel')" ${isLoading?'disabled':''} style="padding:3px 8px;border-radius:8px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--critBord);background:var(--critSurf);color:var(--crit)">✕ Cancel</button>
+        </div>`;
+        return`<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:6px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span class="sub-badge ${stMap[st]||'sub-none'}">${stLabel[st]||st}</span>
+            <span style="font-size:10px;color:var(--textTer)">${sub.frequency||''}</span>
+          </div>
+          ${lines}
+          ${(isActive||isPaused)?`<div style="display:flex;justify-content:space-between;font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid var(--borderLt)"><span style="color:var(--textSec)">Next order</span><span style="font-weight:600">${nextDate}</span></div>`:''}
+          ${sub.totalPrice?`<div style="display:flex;justify-content:space-between;font-size:11px;margin-top:2px"><span style="color:var(--textSec)">Total</span><span style="font-weight:600">$${sub.totalPrice}</span></div>`:''}
+          <div style="margin-top:8px">${actionBtns}</div>
+        </div>`;
+      }).join('');
+      // Portal link buttons
+      const sid=sh.shopifyId;
+      loopHTML+=`<div style="display:flex;gap:4px;margin-top:6px">
+        <button onclick="loopPortalLink('${sid}')" style="flex:1;padding:5px;border-radius:8px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--priBord);background:var(--priSurf);color:var(--pri)">📋 Copy Portal Link</button>
+        <button onclick="loopInsertPortalLink('${sid}')" style="flex:1;padding:5px;border-radius:8px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--textSec)">+ Insert in Reply</button>
+      </div>`;
+    }else if(S.loopSubs&&S.loopSubs.length===0){
+      loopHTML=`<span class="sub-badge sub-none">No Subscription</span>`;
+    }else{
+      loopHTML=`<span class="sub-badge ${subMap[c.subscriptionStatus]||'sub-none'}">${subLabel[c.subscriptionStatus]||'—'}</span>`;
+    }
     let prodsHTML='';const prods=Object.entries(c.productsPurchased||{});
     if(prods.length)prodsHTML=`<div class="products-list" style="margin-top:8px">${prods.map(([n,q])=>`<div class="product-item"><span class="product-name">${esc(n)}</span><span class="product-qty">×${q}</span></div>`).join('')}</div>`;
     const visibleOrders=S.showAllOrders?sh.orders:(sh.orders||[]).slice(0,5);
@@ -356,7 +421,7 @@ function render(){
       if(!S.showAllOrders&&hiddenCount>0)ordersHTML+=`<button class="show-more-btn" onclick="S.showAllOrders=true;render()">Show ${hiddenCount} more orders</button>`;
       else if(S.showAllOrders&&sh.orders.length>5)ordersHTML+=`<button class="show-more-btn" onclick="S.showAllOrders=false;render()">Show less</button>`;
     }else ordersHTML='<div style="color:var(--textTer);font-size:11px;font-style:italic">No orders</div>';
-    shopHTML=`<div style="margin-bottom:8px"><span class="sub-badge ${subMap[c.subscriptionStatus]||'sub-none'}">${subLabel[c.subscriptionStatus]||'—'}</span>${(c.subscriptionStatus==='active'||c.subscriptionStatus==='paused')&&subManageUrl?`<button onclick="copyText('${subManageUrl}',this)" style="margin-left:6px;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--priBord);background:var(--priSurf);color:var(--pri)">📋 Copy Sub URL</button><button onclick="insertSubLink('${subManageUrl}')" style="margin-left:4px;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:550;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--textSec)">+ Insert in Reply</button>`:''}</div><div class="stat-cards"><div class="stat-card"><div class="stat-card-n">${c.totalOrders}</div><div class="stat-card-l">Orders</div></div><div class="stat-card"><div class="stat-card-n">$${c.totalSpent}</div><div class="stat-card-l">LTV</div></div><div class="stat-card"><div class="stat-card-n">$${c.avgOrderValue}</div><div class="stat-card-l">AOV</div></div></div>${prodsHTML}<div style="font-size:10px;font-weight:650;color:var(--textSec);text-transform:uppercase;margin:10px 0 6px;letter-spacing:0.3px">Recent Orders</div>${ordersHTML}`;
+    shopHTML=`<div style="margin-bottom:8px">${loopHTML}</div><div class="stat-cards"><div class="stat-card"><div class="stat-card-n">${c.totalOrders}</div><div class="stat-card-l">Orders</div></div><div class="stat-card"><div class="stat-card-n">$${c.totalSpent}</div><div class="stat-card-l">LTV</div></div><div class="stat-card"><div class="stat-card-n">$${c.avgOrderValue}</div><div class="stat-card-l">AOV</div></div></div>${prodsHTML}<div style="font-size:10px;font-weight:650;color:var(--textSec);text-transform:uppercase;margin:10px 0 6px;letter-spacing:0.3px">Recent Orders</div>${ordersHTML}`;
   }else if(S.shopify&&!S.shopify.found)shopHTML='<div style="color:var(--textTer);font-size:11px;font-style:italic">Not in Shopify</div>';
   else shopHTML='<div style="color:var(--textTer);font-size:11px">—</div>';
 
@@ -397,13 +462,14 @@ function renderList(){const el=document.getElementById('ticket-list');if(!el)ret
 
 async function loadTickets(){upd({loading:true,err:null});try{const r=await fetch(API+"/api/tickets");const d=await r.json();const tix=d.tickets||[];const u={tickets:tix,loading:false};if(tix.length&&!S.selId)u.selId=tix[0].id;upd(u);if(tix.length){const t=tix.find(x=>x.id===(S.selId||tix[0].id));if(t?.customer?.id)loadHistory(t.customer.id);if(t?.customer?.email)loadShopify(t.customer.email);}}catch(e){upd({err:"Could not connect.",loading:false});}}
 async function loadHistory(cid){if(!cid)return;upd({custHistoryLoading:true});try{const[h,p]=await Promise.all([fetch(API+"/api/customers/"+cid+"/tickets"),fetch(API+"/api/customers/"+cid)]);upd({custHistory:(await h.json()).tickets||[],custProfile:await p.json(),custHistoryLoading:false});}catch(e){upd({custHistory:[],custProfile:null,custHistoryLoading:false});}}
-async function loadShopify(email){if(!email)return;upd({shopifyLoading:true,showAllOrders:false});try{const r=await fetch(API+"/api/shopify/customer?email="+encodeURIComponent(email));upd({shopify:await r.json(),shopifyLoading:false});}catch(e){upd({shopify:null,shopifyLoading:false});}}
+async function loadShopify(email){if(!email)return;upd({shopifyLoading:true,showAllOrders:false,loopSubs:null,loopLoading:true});try{const r=await fetch(API+"/api/shopify/customer?email="+encodeURIComponent(email));const d=await r.json();upd({shopify:d,shopifyLoading:false});if(d.found&&d.shopifyId)loadLoop(d.shopifyId);}catch(e){upd({shopify:null,shopifyLoading:false,loopLoading:false});}}
+async function loadLoop(shopifyId){if(!shopifyId)return;try{const r=await fetch(API+"/api/loop/customer/"+shopifyId);const d=await r.json();upd({loopSubs:d.found?d.subscriptions:[],loopLoading:false});}catch(e){upd({loopSubs:null,loopLoading:false});}}
 async function doStatus(s){const t=sel();if(!t)return;upd({tickets:S.tickets.map(x=>x.id===S.selId?{...x,status:s,updatedAt:new Date().toISOString()}:x)});fetch(API+"/api/tickets/"+t.id+"/status",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:s})});}
 async function doSend(){if(!S.reply.trim())return;const t=sel();if(!t)return;const m={id:Date.now(),from:"agent",name:"Lauren",text:S.reply,time:new Date().toISOString()};upd({tickets:S.tickets.map(x=>x.id===S.selId?{...x,messages:[...(x.messages||[]),m],updatedAt:new Date().toISOString()}:x),reply:"",ctx:"",showCtx:false});try{const r=await fetch(API+"/api/tickets/"+t.id+"/reply",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({content:m.text,sender_name:"Lauren"})});const d=await r.json();if(d.emailSent){const em={id:Date.now()+1,from:"system",name:"System",text:"📧 Email sent to "+t.customer.email,time:new Date().toISOString()};upd({tickets:S.tickets.map(x=>x.id===S.selId?{...x,messages:[...(x.messages||[]),em]}:x)});}}catch(e){console.error('Send error:',e);}}
 async function doNote(){if(!S.noteIn.trim())return;const t=sel();if(!t)return;const n={id:Date.now(),author:"Josh",text:S.noteIn,time:new Date().toISOString()};upd({tickets:S.tickets.map(x=>x.id===S.selId?{...x,notes:[...(x.notes||[]),n]}:x),noteIn:""});try{const r=await fetch(API+"/api/tickets/"+t.id+"/notes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({content:n.text,author:"Josh"})});const d=await r.json();if(d.newCustomerTags?.length){upd({tickets:S.tickets.map(x=>{if(x.id!==S.selId)return x;return{...x,customer:{...x.customer,tags:[...new Set([...(x.customer.tags||[]),...d.newCustomerTags])]}};})});}}catch(e){}}
 async function doDraft(){const t=sel();if(!t)return;upd({drafting:true,reply:""});try{const r=await fetch(API+"/api/tickets/"+t.id+"/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({context:S.ctx})});const d=await r.json();if(d.draft){let i=0;const dr=d.draft;const iv=setInterval(()=>{S.reply=dr.slice(0,i);i+=6;if(i>dr.length){S.reply=dr;S.drafting=false;clearInterval(iv);}render();},8);}else upd({drafting:false,reply:"[Failed]"});}catch(e){upd({drafting:false,reply:"[Error]"});}}
 async function doMerge(p,s){if(!confirm("Merge? Cannot undo."))return;try{const r=await fetch(API+"/api/customers/merge",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({primary_id:p,secondary_id:s})});const d=await r.json();if(d.success){alert(d.message);loadTickets();}}catch(e){alert(e.message);}}
-function selectTicket(id){S.selId=id;S.reply='';S.ctx='';S.showCtx=false;S.custHistory=null;S.custProfile=null;S.shopify=null;S.orderFlyout=null;S.showAllOrders=false;S.mobilePanel='chat';render();const t=S.tickets.find(x=>x.id===id);if(t?.customer?.id)loadHistory(t.customer.id);if(t?.customer?.email)loadShopify(t.customer.email);}
+function selectTicket(id){S.selId=id;S.reply='';S.ctx='';S.showCtx=false;S.custHistory=null;S.custProfile=null;S.shopify=null;S.orderFlyout=null;S.showAllOrders=false;S.loopSubs=null;S.loopLoading=false;S.loopAction=null;S.showRefund=false;S.mobilePanel='chat';render();const t=S.tickets.find(x=>x.id===id);if(t?.customer?.id)loadHistory(t.customer.id);if(t?.customer?.email)loadShopify(t.customer.email);}
 async function loadKB(){try{const r=await fetch(API+"/api/kb");upd({kbItems:(await r.json()).items||[]});}catch(e){}}
 async function addKBItem(){if(!S.kbNewTitle.trim()||!S.kbNewContent.trim())return;try{const r=await fetch(API+"/api/kb",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({category:S.kbNewCat,title:S.kbNewTitle,content:S.kbNewContent,priority:S.kbNewPri})});const d=await r.json();if(d.item)upd({kbItems:[...S.kbItems,d.item],kbAddOpen:false,kbNewTitle:"",kbNewContent:"",kbNewCat:"brand_voice",kbNewPri:5});}catch(e){}}
 async function deleteKBItem(id){if(!confirm("Delete?"))return;try{await fetch(API+"/api/kb/"+id,{method:"DELETE"});upd({kbItems:S.kbItems.filter(x=>x.id!==id)});}catch(e){}}
